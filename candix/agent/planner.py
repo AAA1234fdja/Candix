@@ -32,6 +32,8 @@ class PlannerState:
     proofs: int = 0
     endpoints: list[dict[str, Any]] = field(default_factory=list)
     turn: int = 0
+    next_targets: list[dict[str, Any]] = field(default_factory=list)
+    todos: str = ""
 
     def to_prompt(self) -> str:
         payload = {
@@ -48,6 +50,8 @@ class PlannerState:
             "provable_facts": self.provable_facts,
             "proofs": self.proofs,
             "endpoints_known": len(self.endpoints),
+            "next_targets": self.next_targets[:5],
+            "todos": self.todos[-1200:],
             "turn": self.turn,
             "blackboard": self.blackboard[-3000:],
         }
@@ -124,17 +128,34 @@ class HeuristicPlanner:
             )
             intents = [detection]
             if "detect.run" in attempted and endpoints:
-                intents.append(
-                    Intent(
-                        title="Probe uncovered endpoints",
-                        description="Issue a plain request to endpoints the detectors did not touch, to check they are live.",
-                        phase=Phase.DETECT,
-                        tool="endpoints.list",
-                        arguments={"limit": 25},
-                        priority=0.5,
-                        tags=("state",),
+                best = next((row for row in state.next_targets if row.get("url")), None)
+                if best is not None:
+                    intents.append(
+                        Intent(
+                            title=f"Probe {str(best.get('url', ''))[:70]}",
+                            description=(
+                                "The catalogue ran and found nothing here; request the highest-scoring endpoint directly "
+                                "so the next detection pass has a live sample."
+                            ),
+                            phase=Phase.DETECT,
+                            tool="web.probe",
+                            arguments={"url": str(best.get("url", ""))},
+                            priority=0.6,
+                            tags=("probe",),
+                        )
                     )
-                )
+                else:
+                    intents.append(
+                        Intent(
+                            title="Probe uncovered endpoints",
+                            description="Issue a plain request to endpoints the detectors did not touch, to check they are live.",
+                            phase=Phase.DETECT,
+                            tool="endpoints.list",
+                            arguments={"limit": 25},
+                            priority=0.5,
+                            tags=("state",),
+                        )
+                    )
             return Decision("plan", "endpoints exist but nothing has been tested", intents, 0.75, self.name)
 
         risky = [finding for finding in findings if str(finding.get("severity")) in {"critical", "high"}]

@@ -10,6 +10,7 @@ from candix.agent.blackboard import Blackboard, Todo
 from candix.agent.budget import AgentBudget, BudgetLimits
 from candix.agent.facts import Confidence, Fact, FactSource, FactStore
 from candix.agent.graph import AssetGraph, EdgeKind, ExplorationGraph, LinkedGraphs, NodeKind
+from candix.agent.harness import Harness, HarnessSettings
 from candix.agent.guard import DenyList, OutputGuard, RedLines, SafetyDecision, ScopeBlocked, ScopeGuard
 from candix.agent.journal import Journal, JournalEntry, NullJournal
 from candix.agent.loop import AgentLoop, LoopConfig, LoopEvent
@@ -50,6 +51,8 @@ __all__ = [
     "FactSource",
     "FactStore",
     "Goal",
+    "Harness",
+    "HarnessSettings",
     "HeuristicPlanner",
     "Intent",
     "IntentScheduler",

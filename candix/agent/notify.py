@@ -248,7 +248,7 @@ def build_message(result: Any, *, title: str | None = None) -> Message:
     )
 
 
-def from_config(config: dict[str, Any]) -> Router:
+def from_config(config: dict[str, Any], *, gate: Any = None) -> Router:
     router = Router(min_severity=str(config.get("min_severity", "info")), dry_run=bool(config.get("dry_run", False)))
     if config.get("console", True):
         router.add(ConsoleChannel())
@@ -262,7 +262,14 @@ def from_config(config: dict[str, Any]) -> Router:
     if config.get("discord"):
         router.add(DiscordWebhook(str(config["discord"])))
     if config.get("command"):
-        router.add(CommandChannel([str(item) for item in config["command"]]))
+        router.add(
+            CommandChannel(
+                [str(item) for item in config["command"]],
+                gate=gate,
+                allowed_prefixes=tuple(str(item) for item in config.get("allowed_prefixes", ()) or ()),
+                max_risk=int(config.get("max_risk", 70)),
+            )
+        )
     return router
 
 

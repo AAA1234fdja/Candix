@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import socket
 import sys
@@ -728,6 +729,25 @@ def _agent_client(args: Any) -> Any:
     return LLMClient([provider], retry=RetryPolicy(attempts=2))
 
 
+def _notify_config(args: Any) -> dict[str, Any]:
+    """Turn the notify flags into the dict the harness router expects."""
+
+    config: dict[str, Any] = {}
+    if getattr(args, "notify_file", ""):
+        config["file"] = args.notify_file
+    if getattr(args, "notify_webhook", ""):
+        config["webhook"] = args.notify_webhook
+    if getattr(args, "notify_slack", ""):
+        config["slack"] = args.notify_slack
+    commands = [str(item) for item in (getattr(args, "notify_command", []) or []) if str(item).strip()]
+    if commands:
+        config["command"] = shlex.split(commands[0])
+        config["allowed_prefixes"] = list(getattr(args, "allow_command", []) or [])
+    if config:
+        config.setdefault("console", False)
+    return config
+
+
 def cmd_agent(args: Any) -> int:
     from candix.agent import AgentSession, AgentSettings, AutonomyLevel, BudgetLimits
     from candix.agent.reporting import render_json, render_markdown, summary_line
@@ -787,6 +807,16 @@ def cmd_agent(args: Any) -> int:
         explore_ratio=float(getattr(args, "explore_ratio", 0.3) or 0.3),
         priors_path=str(getattr(args, "priors", "") or ""),
         use_priors=not bool(getattr(args, "no_priors", False)),
+        gate=not bool(getattr(args, "no_gate", False)),
+        gate_max_risk=int(getattr(args, "gate_max_risk", 70) or 70),
+        allow_commands=tuple(getattr(args, "allow_command", []) or ()),
+        allow_private=bool(getattr(args, "allow_private", False)),
+        notify_config=_notify_config(args),
+        notify_min_severity=str(getattr(args, "notify_min_severity", "high") or "high"),
+        poc=not bool(getattr(args, "no_poc", False)),
+        review=not bool(getattr(args, "no_review", False)),
+        todos=not bool(getattr(args, "no_todos", False)),
+        targeting=not bool(getattr(args, "no_targeting", False)),
     )
     client = _agent_client(args)
 
@@ -912,6 +942,8 @@ def cmd_agent(args: Any) -> int:
             written["metrics"] = metrics.save(args.metrics)
         except Exception as error:
             echo(out.paint(f"  metrics unavailable: {error}", "yellow"))
+    for kind, path in ((snapshot.get("harness", {}) or {}).get("artifacts") or {}).items():
+        written[f"harness/{kind}"] = str(path)
     if result.proofs:
         try:
             from candix.agent.replay_kit import (checkout_script, from_result, index, write as write_replay)
@@ -941,6 +973,7 @@ def cmd_agent(args: Any) -> int:
             "journal": snapshot["journal"],
             "artifacts": {**written, "session": str(artifacts / "session.json")},
             "lessons": result.lessons,
+            "harness": snapshot.get("harness", {}),
         }
         out.print_json(payload)
         return EXIT_FINDINGS if result.findings else EXIT_OK
@@ -957,6 +990,9 @@ def cmd_agent(args: Any) -> int:
             ("triage", str(snapshot.get("triage", {}).get("summary", ""))[:70] or "n/a"),
             ("scorecard", str(snapshot.get("scorecard", {}).get("summary", ""))[:70] or "n/a"),
             ("asvs", str(snapshot.get("compliance", {}).get("summary", ""))[:70] or "n/a"),
+            ("gate", f"{snapshot.get('harness', {}).get('gate', {}).get('blocked', 0)} blocked"),
+            ("review", str(snapshot.get("harness", {}).get("review", {}).get("total", 0)) + " under review"),
+            ("todos", str((snapshot.get("harness", {}) or {}).get("todos", "") or "none")[:60]),
             ("approvals", str(snapshot["approvals"]["pending"]) + " pending"),
             ("journal", str(snapshot["journal"].get("entries", 0)) + " entries"),
         ],
@@ -984,6 +1020,13 @@ def cmd_agent(args: Any) -> int:
             for item in prioritized[:15]
         ]
         echo(out.table(["SEVERITY", "FINDING", "ENDPOINT"], rows))
+    blocked_calls = (snapshot.get("harness", {}) or {}).get("gate", {}).get("entries", [])
+    blocked_calls = [entry for entry in blocked_calls if not entry.get("allowed")]
+    if blocked_calls:
+        echo("")
+        echo(out.paint("  refused by the gate:", "yellow"))
+        for entry in blocked_calls[:5]:
+            echo(f"    · {entry.get('subject', '')[:70]} — {entry.get('reason', '')[:80]}")
     if result.lessons:
         echo("")
         echo(out.paint("  lessons for the next run:", "grey"))
@@ -1002,12 +1045,15 @@ def _agent_dry_run(session: Any, settings: Any, args: Any, out: Any) -> int:
     from candix.agent.planner import PlannerState
 
     planner = session.build_planner()
+    extras = session.harness.plan_extras(session.assets, [])
     state = PlannerState(
         goal=settings.goal,
         targets=session.targets,
         coverage=session.assets.coverage(),
         remaining_turns=settings.max_turns,
         exploit_enabled=settings.exploit,
+        next_targets=extras.get("next_targets", []),
+        todos=extras.get("todos", ""),
     )
     decision = planner.decide(state)
     from candix.agent.simulator import simulate
@@ -1082,6 +1128,153 @@ def cmd_notify(args: Any) -> int:
     if args.json_output:
         out.print_json({"results": results})
     return EXIT_OK if all(item.get("ok", True) for item in results) else EXIT_ERROR
+
+
+def cmd_gate(args: Any) -> int:
+    """Answer one question: would this command run, and why?"""
+
+    from candix.agent.intercept import CommandGate, level_of, score_command
+
+    command = " ".join(str(item) for item in args.argv).strip()
+    gate = CommandGate(
+        allowed_prefixes=tuple(args.allow_prefix),
+        max_risk=int(args.max_risk),
+        targets=tuple(args.target),
+    )
+    decision = gate.check(command, targets=args.target)
+    risk = score_command(command)
+    if args.json_output:
+        out.print_json(
+            {
+                "command": command,
+                "allowed": decision.allowed,
+                "rule": decision.rule,
+                "reason": decision.reason,
+                "prefix": decision.prefix,
+                "risk": risk.to_dict(),
+                "level": level_of(risk.score),
+            }
+        )
+        return EXIT_OK if decision.allowed else EXIT_FINDINGS
+    echo(out.rule("gate"))
+    echo(out.kv_table(
+        [
+            ("command", command[:100]),
+            ("prefix", decision.prefix or "n/a"),
+            ("risk", f"{risk.score}/100 ({level_of(risk.score)})"),
+            ("decision", "allow" if decision.allowed else "block"),
+            ("rule", decision.rule or "-"),
+            ("reason", decision.reason[:110]),
+        ],
+        indent=2,
+    ))
+    for reason in risk.reasons[:5]:
+        echo(out.paint(f"  · {reason}", "grey"))
+    return EXIT_OK if decision.allowed else EXIT_FINDINGS
+
+
+def cmd_harness(args: Any) -> int:
+    """Show what a run actually gets, and check targets against the gate."""
+
+    from candix.agent.harness import HarnessSettings, status
+    from candix.agent.intercept import TargetGate
+
+    rows = status()
+    report: dict[str, Any] = {"capabilities": rows}
+    if args.run:
+        session_path = Path(args.run)
+        if session_path.is_dir():
+            session_path = session_path / "session.json"
+        try:
+            payload = json.loads(session_path.read_text(encoding="utf-8"))
+            report["run"] = payload.get("harness", {})
+        except (OSError, ValueError) as error:
+            echo(out.paint(f"  cannot read {session_path}: {error}", "red"))
+            return EXIT_ERROR
+    if args.target:
+        gate = TargetGate(allow=tuple(args.target))
+        report["targets"] = [
+            {"target": item, **gate.check(item).to_dict()} for item in args.target
+        ]
+    report["settings"] = HarnessSettings().to_dict()
+    if args.json_output:
+        out.print_json(report)
+        return EXIT_OK
+    echo(out.rule("harness"))
+    echo(out.table(
+        ["CAPABILITY", "MODULE", "STATE"],
+        [(row["capability"], row["module"], row["state"]) for row in rows],
+    ))
+    echo("")
+    echo(out.paint("  defaults: gate on, poc/review/todos/targeting on, notify off", "grey"))
+    for item in report.get("targets", []):
+        mark = "allow" if item["allowed"] else "block"
+        echo(f"  {mark:5} {item['target']} — {item['reason'][:80]}")
+    if "run" in report:
+        harness_block = report["run"] or {}
+        echo(out.kv_table(
+            [
+                ("run gate", str(harness_block.get("gate", {}).get("blocked", "n/a")) + " blocked"),
+                ("poc", str(harness_block.get("poc", "n/a"))),
+                ("review", _review_line(harness_block.get("review"))),
+                ("todos", str(harness_block.get("todos", "n/a"))[:70]),
+                ("notify", str(harness_block.get("notify", {}).get("summary", "n/a"))[:70]),
+            ],
+            indent=2,
+        ))
+    echo("")
+    return EXIT_OK
+
+
+def _review_line(block: Any) -> str:
+    if not isinstance(block, dict):
+        return "n/a"
+    counts = block.get("counts") or {}
+    return f"{block.get('total', 0)} finding(s), {counts.get('pending', 0)} pending"
+
+
+def cmd_review(args: Any) -> int:
+    """Read, print and (optionally) approve a run's reviewer board."""
+
+    from candix.agent.review import ReviewBoard, block_release
+
+    source = Path(args.path)
+    if source.is_dir():
+        source = source / "review.json"
+    if not source.is_file():
+        echo(out.paint(f"  no review board at {source}", "red"))
+        return EXIT_ERROR
+    board = ReviewBoard.load(source)
+    approved = 0
+    if args.approve:
+        approved = board.approve_all(args.reviewer)
+        board.save(source)
+    summary = board.summary()
+    ready, reason = block_release(board)
+    if args.json_output:
+        out.print_json({"summary": summary, "approved_now": approved, "release": {"ready": ready, "reason": reason}})
+        return EXIT_OK if approved or not args.approve else EXIT_FINDINGS
+    if args.markdown:
+        echo(board.markdown())
+        return EXIT_OK
+    echo(out.rule("review"))
+    echo(out.kv_table(
+        [
+            ("board", str(source)),
+            ("findings", str(summary["total"])),
+            ("approved", str(summary["counts"].get("approved", 0))),
+            ("pending", str(len(board.pending()))),
+            ("rejected", str(len(board.blocked()))),
+            ("release", "ready" if ready else reason[:70]),
+        ],
+        indent=2,
+    ))
+    if args.approve:
+        echo(out.paint(f"  approved {approved} finding(s) as {args.reviewer}", "grey"))
+    for item in board.pending()[:10]:
+        echo(f"  · {item.title[:70]} — {item.progress:.0%} of the checklist")
+    echo("")
+    return EXIT_OK
 
 
 def cmd_playbooks(args: Any) -> int:
@@ -1281,6 +1474,9 @@ COMMANDS = {
     "api": cmd_api,
     "notify": cmd_notify,
     "agent": cmd_agent,
+    "gate": cmd_gate,
+    "harness": cmd_harness,
+    "review": cmd_review,
     "playbooks": cmd_playbooks,
     "bundle": cmd_bundle,
     "agent-diff": cmd_agent_diff,

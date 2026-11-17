@@ -71,6 +71,7 @@ class AgentLoop:
         config: LoopConfig | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         run_id: str = "",
+        harness: Any = None,
     ) -> None:
         self.goal = goal
         self.run_id = run_id
@@ -91,6 +92,7 @@ class AgentLoop:
         self.memory = memory
         self.config = config or LoopConfig()
         self.on_event = on_event
+        self.harness = harness
         self.events: list[LoopEvent] = []
 
     # ------------------------------------------------------------------
@@ -200,6 +202,13 @@ class AgentLoop:
             for node in self.exploration.of_kind("intent")
             if node.attributes.get("status") in {"blocked", "failed"}
         ]
+        extras: dict[str, Any] = {}
+        if self.harness is not None:
+            try:
+                extras = self.harness.plan_extras(self.assets, self._findings())
+            except Exception:
+                self.telemetry.increment("harness.plan_extras_failed")
+                extras = {}
         return PlannerState(
             goal=self.goal.statement,
             targets=list(self.goal.targets),
@@ -216,6 +225,8 @@ class AgentLoop:
             proofs=len(self.context.state.get("proofs") or []),
             endpoints=self._endpoint_rows(),
             turn=self.budget.turns,
+            next_targets=list(extras.get("next_targets") or []),
+            todos=str(extras.get("todos") or ""),
         )
 
     def _endpoint_rows(self, *, limit: int = 80) -> list[dict[str, Any]]:
@@ -487,6 +498,11 @@ class AgentLoop:
     # ------------------------------------------------------------------
     def _emit(self, kind: str, payload: dict[str, Any]) -> None:
         self.events.append(LoopEvent(kind, payload))
+        if self.harness is not None:
+            try:
+                self.harness.on_event(kind, payload)
+            except Exception:
+                self.telemetry.increment("harness.event_failed")
         if self.on_event is not None:
             try:
                 self.on_event(kind, payload)

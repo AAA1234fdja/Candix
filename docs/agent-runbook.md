@@ -43,6 +43,9 @@ Exit codes: `0` clean, `10` findings, `1` error, `2` usage, `130` interrupted.
 | `session.json` | budget, telemetry, graphs, policy |
 | `insights.md` | where the time went and what to change |
 | `replay/` | runnable proofs with credentials as env vars |
+| `poc/` | one curl/python/js/httpie reproduction per finding |
+| `review.json`, `review.md` | reviewer checklist per finding, and the board as prose |
+| `todos.json` | what the run meant to do and what it parked, for the next run |
 | `journal.jsonl` | every event, in order |
 
 ## When a run stops early
@@ -60,7 +63,13 @@ Exit codes: `0` clean, `10` findings, `1` error, `2` usage, `130` interrupted.
 
 Findings are not final until someone signs off. `agent.review` builds a checklist
 per finding from the knowledge base, tracks reviewer comments, and refuses to
-approve with items unchecked:
+approve with items unchecked. The run already seeds the board and writes it:
+
+```bash
+candix review runs/latest            # status, pending items, release verdict
+candix review runs/latest --approve --reviewer ana
+candix review runs/latest --markdown > review.md
+```
 
 ```python
 from candix.agent.review import ReviewBoard, block_release
@@ -103,7 +112,26 @@ Keep the agent's own audit in the pipeline too: `session.json` contains
 | `--adaptive-strategy thompson` | sharper exploration when arms are close |
 | `--explore-ratio` | share of turns reserved for exploration |
 | `--priors` / `--no-priors` | where cross-run priors live, or disable them |
-| `CommandGate` | command channels are gated by argv prefix, denylist and risk ceiling |
+| `--gate-max-risk`, `--allow-command` | risk ceiling and argv prefixes for tool calls and command channels |
+| `--no-gate` | turn the intercept gate off (only for a target you already know) |
+| `--no-poc`, `--no-review`, `--no-todos`, `--no-targeting` | skip the harness artifacts |
+| `--notify-webhook`, `--notify-slack`, `--notify-file`, `--notify-command` | tell someone when a run finds something |
+| `--notify-min-severity` | how bad a finding has to be before it is worth a message |
+
+## What the harness connects
+
+`candix harness` lists every capability and the module that provides it; `candix
+harness --run runs/latest` prints the gate, PoC, review, todo and notification
+block of a finished run. The composition root is `candix/agent/harness.py`:
+
+| Capability | Effect on a run |
+| --- | --- |
+| intercept gate | every tool call is risk-scored and target-checked before the handler |
+| targeting | the planner sees the five highest-value endpoints, not just a list |
+| todos | each intent becomes a durable todo; failures are parked for the next run |
+| poc | findings arrive with curl, python, js and httpie reproductions |
+| review | the board is seeded per finding and blocks release until signed off |
+| notify | one message per run, deduplicated, redacted, gated if it shells out |
 
 ## Common problems
 
@@ -115,3 +143,8 @@ Keep the agent's own audit in the pipeline too: `session.json` contains
   finding class. Check `exploit.run` in the journal.
 - **Model planner unavailable**: the client falls back to the heuristic planner and
   says so in the plan reasoning; the run continues.
+- **"refused by the gate"** in the summary: the call was out of scope or above the
+  risk ceiling. `candix gate "<the command>"` answers why; the same reasons are in
+  `session.json → harness.gate.entries`.
+- **Nothing was notified**: no finding reached `--notify-min-severity`, which
+  defaults to `high`. Lower it, or check `harness.notify.deliveries` in the snapshot.

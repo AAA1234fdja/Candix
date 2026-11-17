@@ -504,6 +504,26 @@ class AuditEntry:
         return {"subject": self.subject, "allowed": self.allowed, "reason": self.reason, "rule": self.rule}
 
 
+_URL_PATTERN = re.compile(r"(?:https?|wss?)://[^\s'\"`<>|;]+", re.IGNORECASE)
+_IPV4_PATTERN = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b")
+
+
+def command_targets(command: str) -> list[str]:
+    """The targets a command names, so the target gate sees the real subject.
+
+    A command does not carry its target in a separate argument: it carries it in
+    the argv, in a URL, an IP, a ``host:port``. Extracting them here is what stops
+    ``curl https://metadata.google.internal`` from passing on risk alone.
+    """
+
+    candidates: list[str] = []
+    for match in _URL_PATTERN.findall(command or ""):
+        candidates.append(match.rstrip(".,)"))
+    for match in _IPV4_PATTERN.findall(command or ""):
+        candidates.append(match)
+    return list(dict.fromkeys(candidates))
+
+
 class CommandGate:
     """One entry point for command execution decisions, with an audit trail."""
 
@@ -519,8 +539,9 @@ class CommandGate:
         if not decision.allowed:
             return decision
         if self.target_gate is not None:
-            for candidate in targets:
-                target_decision = self.target_gate.check(str(candidate))
+            declared = [str(item) for item in targets] or command_targets(command)
+            for candidate in declared:
+                target_decision = self.target_gate.check(candidate)
                 if not target_decision.allowed:
                     blocked = Decision(False, target_decision.reason, "target", decision.risk, decision.prefix)
                     self.audit[-1] = AuditEntry(command[:160], False, blocked.reason, "target")

@@ -92,6 +92,7 @@ class ToolContext:
     artifacts: Path | None = None
     settings: dict[str, Any] = field(default_factory=dict)
     state: dict[str, Any] = field(default_factory=dict)
+    interceptor: Any = None
 
     def path(self, name: str) -> Path | None:
         if self.artifacts is None:
@@ -251,7 +252,24 @@ class ToolRegistry:
         red = context.guard.red_lines.check(name, tool=name, arguments=arguments)
         if not red.allowed:
             return red
-        return None
+        return self._intercept(name, arguments, context)
+
+    def _intercept(self, name: str, arguments: dict[str, Any], context: ToolContext) -> SafetyDecision | None:
+        """The harness gate: risk score and target check for this exact call."""
+
+        interceptor = context.interceptor
+        if interceptor is None:
+            return None
+        try:
+            verdict = interceptor.check_tool(name, arguments)
+        except Exception as error:  # a broken gate fails closed, never open
+            context.telemetry.increment("intercept.failed")
+            return SafetyDecision(False, reason=f"gate failed: {type(error).__name__}: {error}", rule="intercept")
+        if verdict is None or verdict.allowed:
+            return None
+        risk = getattr(verdict, "risk", None)
+        score = float(getattr(risk, "score", 0) or 0) / 100.0
+        return SafetyDecision(False, reason=verdict.reason, rule=getattr(verdict, "rule", "") or "intercept", risk=score)
 
     @staticmethod
     def _coerce_result(raw: Any) -> ToolResult:
