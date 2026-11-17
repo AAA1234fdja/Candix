@@ -91,6 +91,13 @@ class RiskPolicy:
             risk += 0.15
         return min(1.0, round(max(risk, intent.risk), 3))
 
+    def explain(self, intent: Intent) -> Any:
+        """The 0..100 score with its reasons, for reports and audits."""
+
+        from candix.agent.intercept import score_intent
+
+        return score_intent(intent)
+
     def gate(self, intent: Intent) -> SafetyDecision:
         risk = self.score(intent)
         intent.risk = risk

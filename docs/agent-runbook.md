@@ -103,6 +103,7 @@ Keep the agent's own audit in the pipeline too: `session.json` contains
 | `--adaptive-strategy thompson` | sharper exploration when arms are close |
 | `--explore-ratio` | share of turns reserved for exploration |
 | `--priors` / `--no-priors` | where cross-run priors live, or disable them |
+| `CommandGate` | command channels are gated by argv prefix, denylist and risk ceiling |
 
 ## Common problems
 

@@ -36,7 +36,8 @@ Documentation: [`docs/agent.md`](docs/agent.md),
 [`docs/agent-safety.md`](docs/agent-safety.md),
 [`docs/agent-runbook.md`](docs/agent-runbook.md),
 [`docs/llm.md`](docs/llm.md),
-[`docs/agent-adaptive.md`](docs/agent-adaptive.md). Skills live in [`skills/`](skills).
+[`docs/agent-adaptive.md`](docs/agent-adaptive.md),
+[`docs/engine.md`](docs/engine.md). Skills live in [`skills/`](skills).
 
 ## Safety model
 
