@@ -1470,6 +1470,44 @@ def cmd_agent_diff(args: Any) -> int:
     return EXIT_OK if ok else EXIT_FINDINGS
 
 
+def cmd_engine(args: Any) -> int:
+    """Muestra el estado de todo el engine Go ↔ Python sin falta."""
+    from candix.engine_adapter import Engine
+    eng = Engine.from_env()
+    h = eng.health()
+    payload: dict[str, Any] = {
+        "bridge": h.bridge,
+        "server": h.server,
+        "db": h.db,
+        "guard": {"audit_len": len(h.guard.get("audit", [])), "attributions": h.guard.get("attributions", {})},
+        "egress": h.egress,
+        "traffic": h.traffic,
+        "llm_profiles": [p.__dict__ for p in eng.llmpool.list_profiles()],
+    }
+    if args.score:
+        tool, _, cmd = args.score.partition(":")
+        if not cmd:
+            tool, cmd = "Bash", tool
+        payload["score_demo"] = eng.score_risk(tool or "Bash", {"command": cmd})
+    if args.target_check:
+        nt = eng.normalize_target(args.target_check)
+        payload["target_check"] = {"raw": args.target_check, "ok": getattr(nt, "ok", False), "host": getattr(nt, "host", ""), "kind": getattr(nt, "kind", "")}
+    if args.json_output:
+        out.print_json(payload)
+        return EXIT_OK
+    echo(out.rule("engine — Go <-> Python (todo conectado sin falta)"))
+    server_ok = str(h.server.get("ok", False))
+    echo(out.kv_table([("bridge.enabled", str(h.bridge.get("enabled"))), ("bridge.has_go", str(h.bridge.get("has_go"))), ("server.ok", server_ok), ("db.ok", str(h.db.get("ok"))), ("db.pg", str(h.db.get("pg"))), ("traffic.count", str(h.traffic.get("count")))], indent=2))
+    echo("")
+    echo(out.paint(f"  llm profiles: {len(payload['llm_profiles'])}", "cyan"))
+    for p in payload["llm_profiles"]:
+        echo(f"    - {p['id']}: {p['name']} ({p['provider']}/{p['model']})")
+    if "score_demo" in payload:
+        echo("")
+        echo(out.kv_table([("score", str(payload["score_demo"].get("score"))), ("level", payload["score_demo"].get("level","")), ("reasons", "; ".join(payload["score_demo"].get("reasons", []))[:120])], indent=2))
+    return EXIT_OK
+
+
 COMMANDS = {
     "scan": cmd_scan,
     "exploit": cmd_exploit,
@@ -1495,4 +1533,5 @@ COMMANDS = {
     "bundle": cmd_bundle,
     "agent-diff": cmd_agent_diff,
     "version": cmd_version,
+    "engine": cmd_engine,
 }

@@ -307,6 +307,11 @@ def build_parser() -> Parser:
     harness.add_argument("--target", action="append", default=[], help="check this target against a fresh target gate")
     harness.add_argument("--run", default="", help="read the harness block from a saved run session.json")
 
+    engine_cmd = subparsers.add_parser("engine", help="status of the Go engine ↔ Python bridge (all subsystems)")
+    engine_cmd.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    engine_cmd.add_argument("--score", default="", help="tool call to score, e.g. 'Bash:rm -rf /'")
+    engine_cmd.add_argument("--target-check", default="", help="target to normalize/gate, e.g. https://example.com")
+
     review = subparsers.add_parser("review", help="work with the reviewer board of a finished run")
     review.add_argument("path", help="run directory or review.json")
     review.add_argument("--approve", action="store_true", help="approve every review whose checklist is complete")
