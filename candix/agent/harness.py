@@ -1,21 +1,3 @@
-"""The harness: one object that connects every capability to a real run.
-
-The package grew sideways - a gate here, a notifier there, a review board and a
-todo list that no run ever touched. This module is the composition root that
-puts them on the same object, so the CLI, the API and the loop share one answer
-to "what is wired to this run?".
-
-The harness is deliberately boring:
-
-* it decides nothing the gate does not already decide;
-* it never executes a tool, a command or a request itself;
-* every hook is best-effort - a broken webhook cannot end a run.
-
-What it does own is the sequence: gate the call, record the block, keep the todo
-list honest, rank the surface, write proofs of concept, seed the reviewer and
-tell somebody when the run is worth telling about.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -52,8 +34,6 @@ CAPABILITIES: tuple[tuple[str, str, str], ...] = (
 
 @dataclass
 class HarnessSettings:
-    """What the operator turned on. Every default is the safe one."""
-
     gate: bool = True
     allowed_prefixes: tuple[str, ...] = ()
     max_risk: int = intercept.RISK_HIGH
@@ -65,6 +45,7 @@ class HarnessSettings:
     todos: bool = True
     targeting: bool = True
     artifacts: str = ""
+    engine: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -79,12 +60,11 @@ class HarnessSettings:
             "todos": self.todos,
             "targeting": self.targeting,
             "artifacts": self.artifacts,
+            "engine": dict(self.engine),
         }
 
 
 class Harness:
-    """Attaches the gate, the notifier, the board and the todos to one run."""
-
     def __init__(self, *, targets: Iterable[str] = (), settings: HarnessSettings | None = None) -> None:
         self.settings = settings or HarnessSettings()
         self.targets = tuple(str(item) for item in targets)
@@ -99,6 +79,34 @@ class Harness:
             targets=self.targets,
             allow_private=self.settings.allow_private,
         )
+        engine_cfg = self.settings.engine or {}
+        try:
+            from candix.engine_bridge.config import BridgeConfig
+
+            if isinstance(engine_cfg, BridgeConfig):
+                self.bridge_config = engine_cfg
+            elif isinstance(engine_cfg, dict) and engine_cfg:
+                self.bridge_config = BridgeConfig.from_config({"engine": engine_cfg})
+            else:
+                self.bridge_config = BridgeConfig.from_env()
+                if not engine_cfg and not self.bridge_config.enabled:
+                    self.bridge_config = BridgeConfig()
+                    self.bridge_config.enabled = False
+                if isinstance(engine_cfg, dict) and "enabled" in engine_cfg:
+                    self.bridge_config.enabled = bool(engine_cfg["enabled"])
+            if self.bridge_config.enabled:
+                from candix.engine_bridge.client import EngineClient
+                from candix.engine_bridge.intercept_proxy import InterceptProxy
+
+                self.engine_client = EngineClient(self.bridge_config)
+                self.intercept_proxy = InterceptProxy(self.bridge_config)
+            else:
+                self.engine_client = None
+                self.intercept_proxy = None
+        except Exception:
+            self.bridge_config = None
+            self.engine_client = None
+            self.intercept_proxy = None
         self.router = notify.from_config(dict(self.settings.notify), gate=self.command_gate) if self.settings.notify else None
         self.board = review.ReviewBoard(path=str(self.artifacts / "review.json") if self.artifacts else "")
         self.todos = todolist.TodoList(str(self.artifacts / "todos.json") if (self.artifacts and self.settings.todos) else "")
@@ -108,14 +116,12 @@ class Harness:
         self.poc_files: list[str] = []
         self.written: dict[str, str] = {}
         self._todos_by_title: dict[str, Any] = {}
+        self.dual_events: list[dict[str, Any]] = []
 
-    # ------------------------------------------------------------------ gate
     def check_target(self, value: str) -> intercept.Decision:
         return self.target_gate.check(value)
 
     def check_tool(self, tool: str, arguments: dict[str, Any] | None = None) -> intercept.Decision | None:
-        """The decision the tool registry asks for before running anything."""
-
         if not self.settings.gate:
             return None
         self.tool_checks += 1
@@ -126,6 +132,16 @@ class Harness:
                 decision = self.target_gate.check(value)
                 if not decision.allowed:
                     return self._record_block("target", f"{tool}:{key}", decision)
+                if self.engine_client is not None:
+                    try:
+                        dual = self.engine_client.normalize_target(value)
+                        if dual.ok and dual.data.get("fail_safe"):
+                            disc = dual.data.get("discrepancy")
+                            self.dual_events.append({"kind": "target", "target": value, "dual": dual.to_dict(), "discrepancy": disc})
+                            if not decision.allowed:
+                                pass
+                    except Exception:
+                        pass
         for key in TARGET_LIST_ARGS:
             values = arguments.get(key)
             if isinstance(values, (list, tuple)):
@@ -133,7 +149,29 @@ class Harness:
                     decision = self.target_gate.check(str(value))
                     if not decision.allowed:
                         return self._record_block("target", f"{tool}:{key}", decision)
-        risk = intercept.score_tool(tool, arguments)
+        if self.bridge_config is not None and getattr(self.bridge_config, "enabled", False):
+            try:
+                used, report = intercept.score_via_engine(tool, arguments, bridge_config=self.bridge_config)
+                if used and hasattr(report, "data"):
+                    data = report.data
+                    risk = intercept.RiskReport(int(data.get("score", 0)), level=str(data.get("level", "")), reasons=list(data.get("reasons", [])))
+                    self.dual_events.append(
+                        {
+                            "tool": tool,
+                            "source": report.source,
+                            "python": data.get("python"),
+                            "go": data.get("go"),
+                            "go_error": data.get("go_error", ""),
+                            "discrepancy": data.get("discrepancy"),
+                            "consensus": data.get("consensus"),
+                        }
+                    )
+                else:
+                    risk = report  # type: ignore
+            except Exception:
+                risk = intercept.score_tool(tool, arguments)
+        else:
+            risk = intercept.score_tool(tool, arguments)
         if risk.score >= self.settings.max_risk:
             decision = intercept.Decision(
                 False,
@@ -141,25 +179,59 @@ class Harness:
                 "risk",
                 risk,
             )
-            return self._record_block("risk", tool, decision)
+            extra: dict[str, Any] | None = None
+            if self.dual_events:
+                last = self.dual_events[-1] if self.dual_events else None
+                if last and last.get("tool") == tool:
+                    extra = last
+            return self._record_block("risk", tool, decision, dual=extra)
         return None
 
     def check_command(self, command: str, *, targets: Iterable[str] = ()) -> intercept.Decision:
+        if self.intercept_proxy is not None:
+            try:
+                decision = self.intercept_proxy.check_command_gate(
+                    command,
+                    targets=list(targets) if targets else None,
+                    allowed_prefixes=self.settings.allowed_prefixes,
+                    max_risk=self.settings.max_risk,
+                )
+                if hasattr(decision, "dual"):
+                    dual = getattr(decision, "dual", {}) or {}
+                    self.dual_events.append({"kind": "command", "command": command[:160], "dual": dual, "discrepancy": dual.get("discrepancy"), "go_error": dual.get("go_error", "")})
+                if not decision.allowed:
+                    self._record_block("command", command[:160], decision, dual=getattr(decision, "dual", None))
+                return decision
+            except Exception:
+                pass
         decision = self.command_gate.check(command, targets=targets)
         if not decision.allowed:
             self._record_block("command", command[:160], decision)
         return decision
 
-    def _record_block(self, kind: str, subject: str, decision: intercept.Decision) -> intercept.Decision:
-        self.blocked.append(
-            {"kind": kind, "subject": subject[:200], "rule": decision.rule, "reason": decision.reason[:300]}
-        )
+    def _record_block(self, kind: str, subject: str, decision: intercept.Decision, *, dual: dict[str, Any] | None = None) -> intercept.Decision:
+        entry: dict[str, Any] = {"kind": kind, "subject": subject[:200], "rule": decision.rule, "reason": decision.reason[:300]}
+        if dual:
+            if dual.get("discrepancy"):
+                entry["discrepancy"] = dual["discrepancy"]
+            if dual.get("go_error"):
+                entry["go_error"] = dual["go_error"]
+            if dual.get("consensus"):
+                entry["consensus"] = dual["consensus"]
+            if dual.get("source"):
+                entry["source"] = dual["source"]
+        if getattr(decision, "dual", None):
+            d = getattr(decision, "dual") or {}
+            if d.get("discrepancy") and "discrepancy" not in entry:
+                entry["discrepancy"] = d["discrepancy"]
+            if d.get("go_error") and "go_error" not in entry:
+                entry["go_error"] = d["go_error"]
+            if dual is None and d:
+                entry["dual"] = {k: d[k] for k in ("python", "go", "go_error", "consensus", "discrepancy", "source") if k in d}
+        self.blocked.append(entry)
         return decision
 
-    # ---------------------------------------------------------------- planner
     def plan_extras(self, assets: Any, findings: Iterable[dict[str, Any]]) -> dict[str, Any]:
-        """The two things the planner should see but does not compute itself."""
-
         extras: dict[str, Any] = {"next_targets": [], "todos": ""}
         if self.settings.targeting:
             try:
@@ -173,7 +245,6 @@ class Harness:
                 extras["todos"] = ""
         return extras
 
-    # ----------------------------------------------------------------- events
     def on_event(self, kind: str, payload: dict[str, Any]) -> None:
         if not self.settings.todos:
             return
@@ -204,10 +275,7 @@ class Harness:
                 return item
         return None
 
-    # ------------------------------------------------------------------ close
     def finish(self, result: Any, session: Any = None) -> dict[str, Any]:
-        """Everything the run produces after its last tool call."""
-
         findings = list(getattr(result, "findings", []) or [])
         summary: dict[str, Any] = {
             "gate": self.gate_summary(),
@@ -223,7 +291,7 @@ class Harness:
                 self.poc_files = poc.bundle_for(findings, self.artifacts / "poc")
                 summary["poc"] = len(self.poc_files)
                 self.written["poc"] = str(self.artifacts / "poc")
-            except Exception as error:  # a broken finding must not lose the run
+            except Exception as error:
                 summary["poc_error"] = f"{type(error).__name__}: {error}"
         if self.settings.review:
             try:
@@ -267,9 +335,18 @@ class Harness:
             "deliveries": self.deliveries,
         }
 
-    # ----------------------------------------------------------------- report
     def gate_summary(self) -> dict[str, Any]:
-        return {
+        engine_info: dict[str, Any] = {}
+        try:
+            if self.bridge_config is not None:
+                engine_info = {"enabled": self.bridge_config.enabled, "parallel": self.bridge_config.parallel, "url": self.bridge_config.url, "mode": "parallel" if self.bridge_config.enabled and self.bridge_config.parallel else ("python-only" if not self.bridge_config.enabled else "go-preferente")}
+                if self.dual_events:
+                    engine_info["dual_events"] = self.dual_events[-20:]
+                    engine_info["go_errors"] = [e.get("go_error") for e in self.dual_events if e.get("go_error")]
+                    engine_info["discrepancies"] = [e.get("discrepancy") for e in self.dual_events if e.get("discrepancy")]
+        except Exception:
+            pass
+        base: dict[str, Any] = {
             "enabled": self.settings.gate,
             "max_risk": self.settings.max_risk,
             "targets": list(self.targets),
@@ -278,7 +355,13 @@ class Harness:
             "tool_checks": self.tool_checks,
             "blocked": len(self.blocked),
             "entries": self.command_gate.summary()["entries"],
+            "blocked_details": list(self.blocked[-20:]),
         }
+        if engine_info:
+            base["engine"] = engine_info
+        if self.dual_events:
+            base["dual_events"] = self.dual_events[-20:]
+        return base
 
     def summary(self) -> dict[str, Any]:
         adaptive = getattr(self, "adaptive", None)
@@ -297,14 +380,12 @@ class Harness:
 
 
 def status() -> list[dict[str, str]]:
-    """One row per capability, with the module and whether a run reaches it."""
-
     rows: list[dict[str, str]] = []
     for name, module, detail in CAPABILITIES:
         try:
             __import__(module)
             state = "wired"
-        except Exception as error:  # pragma: no cover - import failure is the finding
+        except Exception as error:
             state = f"unavailable: {type(error).__name__}"
         rows.append({"capability": name, "module": module, "state": state, "detail": detail})
     return rows

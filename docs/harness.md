@@ -28,9 +28,9 @@ policy      candix.agent.policy          wired
 
 | Capability | Hook point | Effect |
 | --- | --- | --- |
-| intercept gate | `ToolRegistry._preflight` via `ToolContext.interceptor` → `EngineClient.score_risk` (parallel) | every tool call is risk-scored **a la par** Python+Go (`max` + union, `reconcile.py`) before the handler runs |
-| target gate | same → `EngineClient.normalize_target` (parallel) | URL, host, `host:port` and CIDR arguments are normalised **en paralelo** and checked against the engagement |
-| command gate | `notify.CommandChannel` and `candix gate` → `InterceptProxy.check_command_gate` | argv prefix rules, code-owned denylist, risk ceiling, and the targets read out of the argv — dual-engine |
+| intercept gate | `ToolRegistry._preflight` via `ToolContext.interceptor` → `intercept.score_tool` or `EngineClient.score_risk` when `engine.enabled=true` | every tool call is risk-scored (python-only by default, **a la par** Python+Go `max`+union when enabled) before the handler runs |
+| target gate | same → `EngineClient.normalize_target` when enabled | URL, host, `host:port` and CIDR arguments are normalised (python-only, parallel when enabled) and checked against the engagement |
+| command gate | `notify.CommandChannel` and `candix gate` → `CommandGate` or `InterceptProxy.check_command_gate` when enabled | argv prefix rules, code-owned denylist, risk ceiling, and the targets read out of the argv |
 | targeting | `AgentLoop._planner_state` → `PlannerState.next_targets` | the planner sees the five highest-value endpoints with the reasons they scored |
 | todos | `Harness.on_event` on `intent.start` / `intent.finish` / `intent.blocked` | each intent becomes a durable todo; failures are parked with a reason |
 | poc | `Harness.finish` | `poc/<n>-<slug>/poc.{sh,py,js,http}` plus a README per finding |

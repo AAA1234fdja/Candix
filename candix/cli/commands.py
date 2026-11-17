@@ -1135,46 +1135,51 @@ def cmd_notify(args: Any) -> int:
 
 
 def cmd_gate(args: Any) -> int:
-    """Answer one question: would this command run, and why?"""
-
     from candix.agent.intercept import CommandGate, level_of, score_command
-
     command = " ".join(str(item) for item in args.argv).strip()
-    gate = CommandGate(
-        allowed_prefixes=tuple(args.allow_prefix),
-        max_risk=int(args.max_risk),
-        targets=tuple(args.target),
-        allow_private=bool(getattr(args, "allow_private", False)),
-    )
+    config = None
+    try:
+        config = load_config(args)
+    except Exception:
+        pass
+    try:
+        from candix.engine_bridge.config import BridgeConfig
+        bc = BridgeConfig.from_config(config) if config is not None else BridgeConfig.from_env()
+    except Exception:
+        bc = None
+    if bc is not None and getattr(bc, "enabled", False):
+        try:
+            from candix.engine_bridge.intercept_proxy import InterceptProxy
+            proxy = InterceptProxy(bc)
+            decision = proxy.check_command_gate(command, targets=tuple(args.target), allowed_prefixes=tuple(args.allow_prefix), max_risk=int(args.max_risk))
+            risk_data = getattr(decision, "dual", None) or {}
+            score = int(risk_data.get("score", decision.risk.score if getattr(decision, "risk", None) else 0))
+            level = risk_data.get("level", level_of(score))
+            risk_dict = {"score": score, "level": level, "reasons": risk_data.get("reasons", [])}
+            if args.json_output:
+                out.print_json({"command": command, "allowed": decision.allowed, "rule": decision.rule, "reason": decision.reason, "prefix": decision.prefix, "risk": risk_dict, "level": level, "dual": risk_data, "engine": bc.to_dict()})
+                return EXIT_OK if decision.allowed else EXIT_FINDINGS
+            echo(out.rule("gate"))
+            echo(out.kv_table([("command", command[:100]), ("prefix", decision.prefix or "n/a"), ("risk", f"{score}/100 ({level})"), ("decision", "allow" if decision.allowed else "block"), ("rule", decision.rule or "-"), ("reason", decision.reason[:110]), ("engine", f"{bc.url} ({risk_data.get('source', '')})")], indent=2))
+            for reason in (risk_data.get("reasons") or [])[:5]:
+                echo(out.paint(f"  \u00b7 {reason}", "grey"))
+            if risk_data.get("discrepancy"):
+                echo(out.paint(f"  discrepancy: {risk_data['discrepancy']}", "yellow"))
+            if risk_data.get("go_error"):
+                echo(out.paint(f"  go_error: {risk_data['go_error']}", "red"))
+            return EXIT_OK if decision.allowed else EXIT_FINDINGS
+        except Exception:
+            pass
+    gate = CommandGate(allowed_prefixes=tuple(args.allow_prefix), max_risk=int(args.max_risk), targets=tuple(args.target), allow_private=bool(getattr(args, "allow_private", False)))
     decision = gate.check(command, targets=args.target)
     risk = score_command(command)
     if args.json_output:
-        out.print_json(
-            {
-                "command": command,
-                "allowed": decision.allowed,
-                "rule": decision.rule,
-                "reason": decision.reason,
-                "prefix": decision.prefix,
-                "risk": risk.to_dict(),
-                "level": level_of(risk.score),
-            }
-        )
+        out.print_json({"command": command, "allowed": decision.allowed, "rule": decision.rule, "reason": decision.reason, "prefix": decision.prefix, "risk": risk.to_dict(), "level": level_of(risk.score)})
         return EXIT_OK if decision.allowed else EXIT_FINDINGS
     echo(out.rule("gate"))
-    echo(out.kv_table(
-        [
-            ("command", command[:100]),
-            ("prefix", decision.prefix or "n/a"),
-            ("risk", f"{risk.score}/100 ({level_of(risk.score)})"),
-            ("decision", "allow" if decision.allowed else "block"),
-            ("rule", decision.rule or "-"),
-            ("reason", decision.reason[:110]),
-        ],
-        indent=2,
-    ))
+    echo(out.kv_table([("command", command[:100]), ("prefix", decision.prefix or "n/a"), ("risk", f"{risk.score}/100 ({level_of(risk.score)})"), ("decision", "allow" if decision.allowed else "block"), ("rule", decision.rule or "-"), ("reason", decision.reason[:110])], indent=2))
     for reason in risk.reasons[:5]:
-        echo(out.paint(f"  · {reason}", "grey"))
+        echo(out.paint(f"  \u00b7 {reason}", "grey"))
     return EXIT_OK if decision.allowed else EXIT_FINDINGS
 
 

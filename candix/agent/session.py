@@ -44,6 +44,7 @@ from candix.llm.errors import BudgetExhausted
 class AgentSettings:
     """Everything the operator can change about a run."""
 
+    engine: dict[str, object] = field(default_factory=dict)
     goal: str = "assess the target and prove what you can"
     autonomy: AutonomyLevel = AutonomyLevel.ASSIST
     exploit: bool = False
@@ -151,6 +152,14 @@ class AgentSession:
         else:
             self.journal = NullJournal()
         self.policy = RiskPolicy(autonomy=settings.autonomy, exploit_enabled=settings.exploit)
+        engine_cfg = dict(getattr(settings, "engine", {}) or {})
+        try:
+            if hasattr(self.context, "config") and getattr(self.context, "config", None) is not None:
+                from candix.engine_bridge.config import BridgeConfig
+                bc = BridgeConfig.from_config(self.context.config)
+                engine_cfg = {"enabled": bc.enabled, "parallel": bc.parallel, "url": bc.url, "timeout": bc.timeout, "use_subprocess": bc.use_subprocess, "bridge_bin": bc.bridge_bin, "auto_start": bc.auto_start, **engine_cfg}
+        except Exception:
+            pass
         self.harness = Harness(
             targets=self.targets,
             settings=HarnessSettings(
@@ -165,6 +174,7 @@ class AgentSession:
                 todos=settings.todos,
                 targeting=settings.targeting,
                 artifacts=settings.artifacts_dir,
+                engine=engine_cfg,
             ),
         )
         self.harness_summary: dict[str, Any] = {}

@@ -582,50 +582,38 @@ def explain(command: str) -> str:
     return "\n".join(lines)
 
 # ---------------------------------------------------------------------------
-# Go engine bridge — interconectado a la par (no delega)
+# Go engine bridge
 # ---------------------------------------------------------------------------
 
-def score_via_engine(tool: str, arguments: dict[str, Any] | None = None) -> tuple[bool, Any]:
-    """Puntúa **en paralelo** Python + Go y reconcilia fail-safe.
-
-    - Si el bridge está habilitado: ambos motores corren concurrentes,
-      ``score=max(py, go)``, razones unidas, discrepancias auditadas.
-    - Si no: solo Python.
-
-    Returns (used_parallel: bool, BridgeResult|RiskReport).
-    ``used_parallel`` es True cuando Go participó (source == \"parallel\").
-    """
+def score_via_engine(tool: str, arguments: dict[str, Any] | None = None, *, bridge_config: Any | None = None) -> tuple[bool, Any]:
     try:
-        from candix.engine_bridge.config import BridgeConfig
         from candix.engine_bridge.client import EngineClient
-
-        cfg = BridgeConfig.from_env()
+        from candix.engine_bridge.config import BridgeConfig
+        if bridge_config is not None:
+            cfg = bridge_config if isinstance(bridge_config, BridgeConfig) else BridgeConfig.from_config(bridge_config)
+        else:
+            cfg = BridgeConfig.from_env()
         client = EngineClient(cfg)
         result = client.score_risk(tool, arguments or {})
-        # parallel => ambos motores participaron
         if result.ok and result.source in {"parallel", "parallel-python-only"}:
             return True, result
         if result.ok and result.source.startswith("go"):
             return True, result
     except Exception:
         pass
-    # python-only (bridge deshabilitado o Go no disponible)
     return False, score_tool(tool, arguments)
 
 
-def score_dual(tool: str, arguments: dict[str, Any] | None = None) -> Any:
-    """Atajo que siempre retorna un BridgeResult reconciliado (a la par)."""
-    from candix.engine_bridge.config import BridgeConfig
+def score_dual(tool: str, arguments: dict[str, Any] | None = None, *, bridge_config: Any | None = None) -> Any:
     from candix.engine_bridge.client import EngineClient
-
-    cfg = BridgeConfig.from_env()
-    # forzar enabled para que intente Go si existe toolchain
-    if not cfg.enabled:
-        # intenta igual si hay toolchain — refleja \"a la par cuando existe\"
-        import shutil
-
-        if shutil.which("go"):
-            cfg.enabled = True
+    from candix.engine_bridge.config import BridgeConfig
+    if bridge_config is not None:
+        cfg = bridge_config if isinstance(bridge_config, BridgeConfig) else BridgeConfig.from_config(bridge_config)
+    else:
+        cfg = BridgeConfig.from_env()
+        if not cfg.enabled:
+            import shutil
+            if shutil.which("go"):
+                cfg.enabled = True
     client = EngineClient(cfg)
     return client.score_risk(tool, arguments or {})
-

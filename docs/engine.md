@@ -105,20 +105,28 @@ launcher.start()
 CANDIX_ENGINE_ENABLED=1          # activa paralelo (default: 0 para CI)
 CANDIX_ENGINE_PARALLEL=1         # 0 = legado Go-preferente
 CANDIX_ENGINE_URL=http://127.0.0.1:8787
-CANDIX_ENGINE_TIMEOUT=2.0
+CANDIX_ENGINE_TIMEOUT=4.0        # subprocess ahora usa binario cacheado, no go run
+CANDIX_ENGINE_BRIDGE_BIN=/opt/candix-bridge
 # TOML
 [engine]
 enabled = true
 parallel = true
 url = "http://127.0.0.1:8787"
+timeout = 4.0
 use_subprocess = true
+bridge_bin = ""            # vacío = .cache/candix-bridge auto-compilado
 auto_start = false
 ```
 
+El subprocess usa binario cacheado `.cache/candix-bridge` (compilado una vez vía
+`go build`, timeout 30s). Siguientes llamadas usan el binario sin recompilar.
+
 ## Licence
 
-`engine/` es **AGPL-3.0** (`engine/LICENSE`); Candix es MIT. Distribuir `engine/`
-obliga AGPL. Provenance en `engine/NOTICE.md`.
+`engine/` es **AGPL-3.0** (`engine/LICENSE`); Candix Python puro es MIT.
+`pyproject.toml` excluye `engine*` del wheel. El bridge invoca Go como proceso
+separado (subprocess/HTTP), sin linking: un wheel sin `engine/` es MIT; distribuir
+`engine/` obliga AGPL y a ofrecer el fuente. Ver `engine/NOTICE.md`.
 
 ## Dónde Candix espeja el engine (todo a la par)
 
