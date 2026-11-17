@@ -97,11 +97,13 @@ class Harness:
             allowed_prefixes=self.settings.allowed_prefixes,
             max_risk=self.settings.max_risk,
             targets=self.targets,
+            allow_private=self.settings.allow_private,
         )
         self.router = notify.from_config(dict(self.settings.notify), gate=self.command_gate) if self.settings.notify else None
         self.board = review.ReviewBoard(path=str(self.artifacts / "review.json") if self.artifacts else "")
         self.todos = todolist.TodoList(str(self.artifacts / "todos.json") if (self.artifacts and self.settings.todos) else "")
         self.blocked: list[dict[str, Any]] = []
+        self.tool_checks = 0
         self.deliveries: list[dict[str, Any]] = []
         self.poc_files: list[str] = []
         self.written: dict[str, str] = {}
@@ -116,6 +118,7 @@ class Harness:
 
         if not self.settings.gate:
             return None
+        self.tool_checks += 1
         arguments = dict(arguments or {})
         for key in TARGET_ARGS:
             value = arguments.get(key)
@@ -272,6 +275,7 @@ class Harness:
             "targets": list(self.targets),
             "allowed_prefixes": list(self.settings.allowed_prefixes),
             "checks": len(self.command_gate.audit),
+            "tool_checks": self.tool_checks,
             "blocked": len(self.blocked),
             "entries": self.command_gate.summary()["entries"],
         }

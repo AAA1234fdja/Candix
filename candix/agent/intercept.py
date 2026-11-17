@@ -527,10 +527,24 @@ def command_targets(command: str) -> list[str]:
 class CommandGate:
     """One entry point for command execution decisions, with an audit trail."""
 
-    def __init__(self, *, allowed_prefixes: Iterable[str] = (), max_risk: int = RISK_HIGH, targets: Iterable[str] = ()) -> None:
+    def __init__(
+        self,
+        *,
+        allowed_prefixes: Iterable[str] = (),
+        max_risk: int = RISK_HIGH,
+        targets: Iterable[str] = (),
+        allow_private: bool = False,
+        allow_ports: Iterable[int] = (),
+        block_metadata: bool = True,
+    ) -> None:
         self.rules = AlwaysAllowDeny(max_risk=max_risk)
         self.allowed_prefixes = tuple(allowed_prefixes)
-        self.target_gate = TargetGate(allow=tuple(targets)) if targets else None
+        self.target_gate = TargetGate(
+            allow=tuple(targets),
+            allow_private=allow_private,
+            allow_ports=tuple(allow_ports),
+            block_metadata=block_metadata,
+        )
         self.audit: list[AuditEntry] = []
 
     def check(self, command: str, *, targets: Iterable[str] = ()) -> Decision:
@@ -538,14 +552,13 @@ class CommandGate:
         self.audit.append(AuditEntry(command[:160], decision.allowed, decision.reason, decision.rule))
         if not decision.allowed:
             return decision
-        if self.target_gate is not None:
-            declared = [str(item) for item in targets] or command_targets(command)
-            for candidate in declared:
-                target_decision = self.target_gate.check(candidate)
-                if not target_decision.allowed:
-                    blocked = Decision(False, target_decision.reason, "target", decision.risk, decision.prefix)
-                    self.audit[-1] = AuditEntry(command[:160], False, blocked.reason, "target")
-                    return blocked
+        declared = [str(item) for item in targets] or command_targets(command)
+        for candidate in declared:
+            target_decision = self.target_gate.check(candidate)
+            if not target_decision.allowed:
+                blocked = Decision(False, target_decision.reason, "target", decision.risk, decision.prefix)
+                self.audit[-1] = AuditEntry(command[:160], False, blocked.reason, "target")
+                return blocked
         return decision
 
     def summary(self) -> dict[str, Any]:

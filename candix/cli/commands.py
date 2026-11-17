@@ -990,7 +990,11 @@ def cmd_agent(args: Any) -> int:
             ("triage", str(snapshot.get("triage", {}).get("summary", ""))[:70] or "n/a"),
             ("scorecard", str(snapshot.get("scorecard", {}).get("summary", ""))[:70] or "n/a"),
             ("asvs", str(snapshot.get("compliance", {}).get("summary", ""))[:70] or "n/a"),
-            ("gate", f"{snapshot.get('harness', {}).get('gate', {}).get('blocked', 0)} blocked"),
+            (
+                "gate",
+                f"{snapshot.get('harness', {}).get('gate', {}).get('tool_checks', 0)} checked, "
+                f"{snapshot.get('harness', {}).get('gate', {}).get('blocked', 0)} blocked",
+            ),
             ("review", str(snapshot.get("harness", {}).get("review", {}).get("total", 0)) + " under review"),
             ("todos", str((snapshot.get("harness", {}) or {}).get("todos", "") or "none")[:60]),
             ("approvals", str(snapshot["approvals"]["pending"]) + " pending"),
@@ -1140,6 +1144,7 @@ def cmd_gate(args: Any) -> int:
         allowed_prefixes=tuple(args.allow_prefix),
         max_risk=int(args.max_risk),
         targets=tuple(args.target),
+        allow_private=bool(getattr(args, "allow_private", False)),
     )
     decision = gate.check(command, targets=args.target)
     risk = score_command(command)
@@ -1214,7 +1219,11 @@ def cmd_harness(args: Any) -> int:
         harness_block = report["run"] or {}
         echo(out.kv_table(
             [
-                ("run gate", str(harness_block.get("gate", {}).get("blocked", "n/a")) + " blocked"),
+                (
+                    "run gate",
+                    f"{harness_block.get('gate', {}).get('tool_checks', 0)} tool call(s) checked, "
+                    f"{harness_block.get('gate', {}).get('blocked', 0)} blocked",
+                ),
                 ("poc", str(harness_block.get("poc", "n/a"))),
                 ("review", _review_line(harness_block.get("review"))),
                 ("todos", str(harness_block.get("todos", "n/a"))[:70]),

@@ -299,6 +299,7 @@ def build_parser() -> Parser:
     gate.add_argument("--allow-prefix", action="append", default=[], metavar="PREFIX",
                       help="argv prefix rule to try (repeatable)")
     gate.add_argument("--max-risk", type=int, default=70, help="risk at or above which the command is refused")
+    gate.add_argument("--allow-private", action="store_true", help="permit private, loopback and link-local targets")
     gate.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
 
     harness = subparsers.add_parser("harness", help="show every capability wired to a run")

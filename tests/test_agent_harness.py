@@ -94,6 +94,7 @@ def test_session_puts_the_gate_in_the_tool_path(tmp_path):
     assert session.harness.blocked and session.harness.blocked[0]["kind"] == "risk"
     counters = session.tool_context.telemetry.snapshot()["counters"]
     assert counters["tools.blocked"] == 1
+    assert session.harness.gate_summary()["tool_checks"] == 1
 
 
 def test_session_allows_the_same_call_with_the_default_ceiling(tmp_path):
@@ -178,6 +179,15 @@ def test_command_gate_denylist_allowlist_and_targets():
     blocked = harness.check_command("notify-send hi", targets=["https://evil.test"])
     assert blocked.allowed is False and blocked.rule == "target"
     assert harness.gate_summary()["blocked"] == 4
+
+
+def test_command_gate_reads_targets_out_of_the_argv():
+    gate = CommandGate(allowed_prefixes=["curl"])
+    assert gate.check("curl https://metadata.google.internal/").rule == "target"
+    assert gate.check("curl 169.254.169.254/latest").rule == "target"
+    assert gate.check("curl https://app.example/x").allowed is True
+    assert CommandGate().check("nmap -p80 10.0.0.5").rule == "target"
+    assert CommandGate(allowed_prefixes=["curl"], allow_private=True).check("curl http://127.0.0.1:9000/").allowed is True
 
 
 def test_target_gate_flags_metadata_and_private_ranges():
@@ -299,7 +309,10 @@ def test_cli_gate_blocks_and_allows():
 
     assert main(["gate", "rm -rf /"]) == 10
     assert main(["gate", "cat", "notes.txt", "--allow-prefix", "cat"]) == 0
-    assert main(["gate", "curl http://169.254.169.254/latest", "--json"]) == 0
+    assert main(["gate", "curl https://example.com/"]) == 0
+    assert main(["gate", "curl http://169.254.169.254/latest", "--json"]) == 10
+    assert main(["gate", "curl http://127.0.0.1:8080/"]) == 10
+    assert main(["gate", "curl http://127.0.0.1:8080/", "--allow-private"]) == 0
 
 
 def test_cli_harness_lists_wiring(capsys):
