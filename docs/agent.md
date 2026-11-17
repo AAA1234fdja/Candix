@@ -31,8 +31,8 @@ goal ──► planner ──► intents ──► policy gate ──► worker 
 | Scheduler | `agent.scheduler` | phase-weighted priority, dependency resolution, retries |
 | Worker | `agent.worker` | `DeterministicWorker` (planned tool), `LLMWorker` (tool loop) |
 | Tools | `agent.toolset` | 15 tools with schemas, caps and timeouts |
-| Guard | `agent.guard` | scope, deny list, red lines, rate limiting |
-| Policy | `agent.policy` | risk scoring, autonomy levels, approval requirement |
+| Guard | `agent.guard` + `engine_bridge` (Go `engine/guard`) | scope, deny list, red lines, rate limiting — dual-engine a la par |
+| Policy | `agent.policy` + `agent.intercept` ↔ `engine/intercept` | risk scoring (parallel `max`+union), autonomy levels, approval requirement |
 | Approvals | `agent.approvals` | queue with risk ceiling and persistence |
 | Facts | `agent.facts` | claims with provenance, merge and conflict handling |
 | Graph | `agent.graph` | hosts, services, endpoints, parameters, technologies, findings |

@@ -4,13 +4,15 @@ Candix has two halves: the deterministic scanner (`candix scan`) and the
 autonomous layer (`candix agent`). The second half is not one loop, it is a set of
 capabilities that have to be **on the same object** to be worth anything: a gate
 that is not consulted, a review board nobody seeds, a todo list that dies with
-the process. `candix/agent/harness.py` is that object.
+the process. `candix/agent/harness.py` is that object. The gate underneath is
+now **dual-engine**: Python `candix/agent/intercept.py` and Go `engine/intercept`
+corren a la par via `candix/engine_bridge` (see `docs/engine.md`).
 
 ```console
 $ candix harness
 CAPABILITY  MODULE                       STATE
-gate        candix.agent.intercept       wired
-targets     candix.agent.intercept       wired
+gate        candix.agent.intercept       wired  (dual: candix/engine_bridge → engine/intercept)
+targets     candix.agent.intercept       wired  (parallel normalisation)
 policy      candix.agent.policy          wired
 ...
 ```
@@ -26,9 +28,9 @@ policy      candix.agent.policy          wired
 
 | Capability | Hook point | Effect |
 | --- | --- | --- |
-| intercept gate | `ToolRegistry._preflight` via `ToolContext.interceptor` | every tool call is risk-scored and target-checked before the handler runs |
-| target gate | same | URL, host, `host:port` and CIDR arguments are normalised and checked against the engagement |
-| command gate | `notify.CommandChannel` and `candix gate` | argv prefix rules, code-owned denylist, risk ceiling, and the targets read out of the argv |
+| intercept gate | `ToolRegistry._preflight` via `ToolContext.interceptor` → `EngineClient.score_risk` (parallel) | every tool call is risk-scored **a la par** Python+Go (`max` + union, `reconcile.py`) before the handler runs |
+| target gate | same → `EngineClient.normalize_target` (parallel) | URL, host, `host:port` and CIDR arguments are normalised **en paralelo** and checked against the engagement |
+| command gate | `notify.CommandChannel` and `candix gate` → `InterceptProxy.check_command_gate` | argv prefix rules, code-owned denylist, risk ceiling, and the targets read out of the argv — dual-engine |
 | targeting | `AgentLoop._planner_state` → `PlannerState.next_targets` | the planner sees the five highest-value endpoints with the reasons they scored |
 | todos | `Harness.on_event` on `intent.start` / `intent.finish` / `intent.blocked` | each intent becomes a durable todo; failures are parked with a reason |
 | poc | `Harness.finish` | `poc/<n>-<slug>/poc.{sh,py,js,http}` plus a README per finding |
@@ -37,7 +39,7 @@ policy      candix.agent.policy          wired
 | evidence, audit, scorecard, triage, compliance, insights, bundle | `AgentSession.snapshot` and the CLI writers | unchanged, but now reachable from one object (`harness.summary()`) |
 
 The gate is the part that matters most. It runs *after* the scope guard and
-*before* the handler, so a refusal is cheap, visible and attributable:
+*before* the handler, **en paralelo Python+Go when `engine.enabled=true`**, so a refusal is cheap, visible and attributable:
 
 | Refusal | Rule | Seen in |
 | --- | --- | --- |

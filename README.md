@@ -5,7 +5,10 @@ checks it against a catalogue of detectors, optionally proves exploitable issues
 turns the result into reports that auditors, engineers and CI systems can consume.
 
 Everything here is standard-library Python (3.11+), so the tool runs from a checkout on
-any host without a dependency install step.
+any host without a dependency install step. The Go engine in `engine/` (renamed fork of
+ARTEX) is **interconectado a la par**: Python and Go score every tool call in parallel
+(`score=max(py,go)`, reasons merged, discrepancies audited) via `candix/engine_bridge`
+— no delegation, pure-Python fallback when Go is absent. See [`docs/engine.md`](docs/engine.md).
 
 ## Agent mode
 

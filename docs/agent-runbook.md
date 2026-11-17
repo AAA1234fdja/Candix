@@ -126,7 +126,7 @@ block of a finished run. The composition root is `candix/agent/harness.py`:
 
 | Capability | Effect on a run |
 | --- | --- |
-| intercept gate | every tool call is risk-scored and target-checked before the handler |
+| intercept gate (dual Python+Go a la par) | every tool call is risk-scored and target-checked **en paralelo** (`engine_bridge` → `engine/intercept`) before the handler |
 | targeting | the planner sees the five highest-value endpoints, not just a list |
 | todos | each intent becomes a durable todo; failures are parked for the next run |
 | poc | findings arrive with curl, python, js and httpie reproductions |
