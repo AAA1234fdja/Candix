@@ -1,0 +1,877 @@
+"""Implementations of the Candix subcommands."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import socket
+import sys
+import time
+import webbrowser
+from pathlib import Path
+from typing import Any, Sequence
+
+from candix import VERSION, AUTHORIZATION_NOTICE
+from candix.cli import output as out
+from candix.cli.args import parse_headers, parse_overrides, split_csv
+from candix.cli.progress import ScanProgress, Spinner
+from candix.core.clock import humanize_duration
+from candix.core.config import PROFILES, Config
+from candix.core.context import ScanOptions
+from candix.core.errors import AuthorizationError, CandixError, ConfigError
+from candix.core.log import configure as configure_logging
+from candix.core.scope import Engagement, build_authorization, write_engagement
+from candix.core.severity import Severity
+
+EXIT_OK = 0
+EXIT_FINDINGS = 10
+EXIT_ERROR = 1
+EXIT_USAGE = 2
+
+
+def echo(text: str = "") -> None:
+    sys.stdout.write(text + "\n")
+
+
+def load_config(args: Any) -> Config:
+    overrides = parse_overrides(getattr(args, "overrides", []) or [])
+    config = Config.load(
+        getattr(args, "config", None),
+        profile=getattr(args, "profile", None),
+        overrides=overrides or None,
+    )
+    _apply_cli_controls(config, args)
+    configure_logging(
+        level="debug" if getattr(args, "log_level", "info") == "debug" or getattr(args, "verbose", False) else getattr(args, "log_level", "info"),
+        log_file=getattr(args, "log_file", None),
+        jsonl=bool(getattr(args, "json_log", False)),
+        quiet=bool(getattr(args, "quiet", False)) or bool(getattr(args, "json_output", False)),
+    )
+    return config
+
+
+def _apply_cli_controls(config: Config, args: Any) -> None:
+    mappings = {
+        "max_rps": "scan.max_rps",
+        "concurrency": "scan.concurrency",
+        "max_pages": "recon.max_crawl_pages",
+        "max_endpoints": "scan.max_endpoints",
+        "timeout": "http.timeout",
+    }
+    for attribute, key in mappings.items():
+        value = getattr(args, attribute, None)
+        if value is not None:
+            config.set(key, value)
+    if getattr(args, "header", None):
+        headers = dict(config.get("http.headers") or {})
+        headers.update(parse_headers(args.header))
+        config.set("http.headers", headers)
+    if getattr(args, "cookie", ""):
+        config.set("http.cookies", args.cookie)
+    if getattr(args, "proxy", ""):
+        config.set("http.proxy", args.proxy)
+    if getattr(args, "insecure", False):
+        config.set("http.verify_tls", False)
+    if getattr(args, "no_intrusive", False):
+        config.set("detect.intrusive", False)
+    if getattr(args, "no_subdomains", False):
+        config.set("scan.include_subdomains", False)
+    if getattr(args, "max_proofs", None) is not None:
+        config.set("exploit.max_proofs", args.max_proofs)
+    if getattr(args, "min_severity", None):
+        config.set("detect.min_severity", args.min_severity)
+        config.set("report.min_severity", args.min_severity)
+    config.validate()
+
+
+def load_engagement(args: Any, targets: Sequence[str], *, allow_exploit: bool) -> Engagement:
+    path = getattr(args, "engagement", None)
+    if path:
+        engagement = Engagement.load(path)
+        for target in targets:
+            if not engagement.scope.matches(target):
+                raise AuthorizationError(
+                    f"{target} is outside the scope of {path}",
+                    scope=[entry.text for entry in engagement.scope.include],
+                )
+        if allow_exploit and not engagement.scope.allow_exploit:
+            raise AuthorizationError(
+                "the authorization document does not permit exploitation",
+                hint="re-issue it with --allow-exploit after approval",
+            )
+        return engagement
+    operator = getattr(args, "authorized", None)
+    if operator:
+        document = build_authorization(
+            engagement=f"adhoc-{int(time.time())}",
+            client="self-declared",
+            operator=operator,
+            authorized_by=getattr(args, "authorized_by", "self"),
+            include=[_scope_text(target) for target in targets],
+            allow_exploit=allow_exploit or bool(getattr(args, "allow_exploit", False)),
+            allow_intrusive=not getattr(args, "no_intrusive", False),
+            max_rps=float(getattr(args, "max_rps", None) or 5.0),
+        )
+        return Engagement.from_document(document)
+    raise AuthorizationError(
+        "no authorization document supplied",
+        hint="use --engagement FILE or --authorized OPERATOR for assets you own",
+        notice=AUTHORIZATION_NOTICE.strip().splitlines()[0],
+    )
+
+
+def _scope_text(target: str) -> str:
+    from candix.net.url import URL
+
+    try:
+        url = URL.parse(target if "://" in target else f"http://{target}")
+    except ValueError:
+        return target
+    return f"{url.host}:{url.port or (443 if url.scheme == 'https' else 80)}"
+
+
+def _build_options(args: Any, *, exploit: bool) -> ScanOptions:
+    options = ScanOptions()
+    options.detectors = split_csv(getattr(args, "detectors", ""))
+    options.exclude_detectors = split_csv(getattr(args, "exclude_detectors", ""))
+    options.categories = split_csv(getattr(args, "categories", ""))
+    if getattr(args, "min_severity", None):
+        options.min_severity = Severity.parse(args.min_severity)
+    options.intrusive = not getattr(args, "no_intrusive", False)
+    options.exploit = exploit
+    options.max_endpoints = int(getattr(args, "max_endpoints", None) or 2000)
+    options.verbose = bool(getattr(args, "verbose", False))
+    options.no_evidence = False
+    return options
+
+
+def _summarise(result: Any, *, json_output: bool) -> None:
+    summary = result.summary()
+    counts = summary.get("findings") or {}
+    if json_output:
+        out.print_json({"summary": summary, "findings": [f.to_dict(include_evidence=False) for f in result.findings.sorted()]})
+        return
+    echo("")
+    echo(out.rule("results"))
+    rows = [
+        ("targets", ", ".join(target.base_url for target in result.context.targets)),
+        ("profile", summary.get("profile", "")),
+        ("duration", humanize_duration(result.duration)),
+        ("endpoints", summary.get("endpoint_stats", {}).get("total", 0)),
+        ("evidence", result.context.evidence.count),
+        ("risk score", f"{summary.get('risk_score', 0):.1f}"),
+        ("findings", out.counts_bar(counts)),
+    ]
+    echo(out.kv_table(rows, indent=2))
+    findings = result.findings.sorted()
+    if findings:
+        echo("")
+        echo(out.table(
+            ["SEVERITY", "TITLE", "ENDPOINT", "VERIFIED"],
+            [
+                [finding.severity.value, finding.title, f"{finding.method} {finding.url}", "yes" if finding.verified else "no"]
+                for finding in findings[:40]
+            ],
+        ))
+        if len(findings) > 40:
+            echo(out.paint(f"  … {len(findings) - 40} more findings in the report", "grey"))
+    warnings = summary.get("warnings") or []
+    if warnings:
+        echo("")
+        for warning in warnings[:5]:
+            echo(f"  {out.paint('warning', 'yellow')} {warning}")
+
+
+def _write_reports(result: Any, args: Any, *, scan_id: str) -> dict[str, Any] | None:
+    from candix.report import build_report
+
+    formats = getattr(args, "formats", "") or ""
+    if getattr(args, "no_report", False) or not formats:
+        return None
+    outdir = getattr(args, "out", None) or str(Path("reports") / scan_id)
+    with Spinner("rendering reports"):
+        bundle = build_report(
+            result,
+            outdir=outdir,
+            formats=formats,
+            min_severity=getattr(args, "min_severity", None) or Severity.INFO,
+            include_evidence=True,
+            archive=bool(getattr(args, "archive", False)),
+        )
+    if getattr(args, "json_output", False):
+        return bundle.to_dict()
+    echo("")
+    echo(out.rule("reports"))
+    rows = [(artifact.format, f"{artifact.path}  ({out.format_bytes(artifact.size)})") for artifact in bundle.artifacts]
+    echo(out.kv_table(rows, indent=2))
+    if bundle.archive_path:
+        echo(out.kv_table([("archive", str(bundle.archive_path))], indent=2))
+    echo(out.kv_table([("manifest", str(bundle.manifest_path))], indent=2))
+    return bundle.to_dict()
+
+
+def cmd_scan(args: Any) -> int:
+    from candix.engine import scan
+
+    config = load_config(args)
+    targets = list(args.targets)
+    engagement = load_engagement(args, targets, allow_exploit=bool(args.exploit))
+    options = _build_options(args, exploit=bool(args.exploit))
+    progress = ScanProgress(verbose=bool(args.verbose), quiet=bool(args.quiet or args.json_output))
+    if not args.quiet and not args.json_output:
+        echo(out.banner(VERSION, subtitle="authorized assessment"))
+        echo("")
+        echo(out.kv_table([
+            ("targets", ", ".join(targets)),
+            ("policy", engagement.authorization.engagement),
+            ("exploit", "enabled" if args.exploit else "disabled"),
+            ("profile", config.get("profile")),
+        ], indent=2))
+    started = time.monotonic()
+    result = scan(
+        targets,
+        config=config,
+        engagement=engagement,
+        options=options,
+        artifacts_dir=getattr(args, "artifacts", None),
+        crawl=not args.no_crawl,
+        discover=not args.no_discover,
+        exploit=bool(args.exploit),
+        on_progress=progress.handle,
+    )
+    elapsed = time.monotonic() - started
+    _summarise(result, json_output=bool(args.json_output))
+    reports = _write_reports(result, args, scan_id=result.context.id)
+    _emit_findings_event(result)
+    if not args.json_output:
+        echo("")
+        echo(f"  {out.paint('scan complete', 'green')} in {humanize_duration(elapsed)}")
+        if reports:
+            echo(f"  {out.paint('report', 'grey')} {out.paint(reports['artifacts'][0]['path'], 'cyan')}")
+    threshold = getattr(args, "fail_on", "none")
+    if threshold and threshold != "none":
+        limit = Severity.parse(threshold)
+        if any(finding.severity.rank >= limit.rank for finding in result.findings):
+            return EXIT_FINDINGS
+    return EXIT_OK
+
+
+def _emit_findings_event(result: Any) -> None:
+    for finding in result.findings.sorted()[:10]:
+        sys.stdout.write("")
+
+
+def cmd_exploit(args: Any) -> int:
+    from candix.engine import scan
+
+    config = load_config(args)
+    targets = list(args.targets)
+    engagement = load_engagement(args, targets, allow_exploit=True)
+    if not engagement.scope.allow_exploit:
+        raise AuthorizationError("exploitation is not permitted by this engagement")
+    config.set("exploit.enabled", True)
+    if getattr(args, "max_proofs", None) is not None:
+        config.set("exploit.max_proofs", args.max_proofs)
+    techniques = split_csv(getattr(args, "techniques", ""))
+    if techniques:
+        config.set("exploit.techniques", techniques)
+    options = _build_options(args, exploit=True)
+    progress = ScanProgress(verbose=bool(args.verbose), quiet=bool(args.quiet or args.json_output))
+    if not args.quiet and not args.json_output:
+        echo(out.banner(VERSION, subtitle="exploitation run"))
+        echo("")
+        echo(out.paint("  Only permitted techniques are attempted; every proof is stored as evidence.", "grey"))
+    result = scan(
+        targets,
+        config=config,
+        engagement=engagement,
+        options=options,
+        artifacts_dir=getattr(args, "output_dir", None),
+        crawl=not args.no_crawl,
+        discover=not args.no_discover,
+        exploit=True,
+        on_progress=progress.handle,
+    )
+    _summarise(result, json_output=bool(args.json_output))
+    proofs = _proof_section(result)
+    if getattr(args, "formats", ""):
+        (args.__dict__.__setitem__("formats", args.formats))
+        _write_reports(result, args, scan_id=result.context.id)
+    if proofs and not args.json_output:
+        echo("")
+        echo(out.rule("proofs"))
+        for proof in proofs:
+            echo(out.box(
+                [
+                    f"{out.paint('technique', 'grey')} {proof.get('technique')}",
+                    f"{out.paint('target', 'grey')}    {proof.get('url', proof.get('endpoint', ''))}",
+                    f"{out.paint('impact', 'grey')}    {proof.get('impact', 'demonstrated')}",
+                ],
+                title=str(proof.get("title") or "proof")[:60],
+                color="green",
+            ))
+    return EXIT_OK
+
+
+def _proof_section(result: Any) -> list[dict[str, Any]]:
+    proofs = getattr(result.context, "metadata", {}).get("proofs", []) or []
+    if proofs and not any(isinstance(item, dict) for item in proofs):
+        proofs = [proof.to_dict() if hasattr(proof, "to_dict") else {"title": str(proof)} for proof in proofs]
+    if proofs:
+        return proofs
+    return [
+        {
+            "title": finding.title,
+            "technique": finding.metadata.get("technique", finding.detector),
+            "url": finding.url,
+            "impact": finding.impact,
+        }
+        for finding in result.findings.sorted()
+        if finding.exploited
+    ]
+
+
+def cmd_report(args: Any) -> int:
+    from candix.report.builder import parse_formats
+    from candix.report.model import ReportModel, select_min_severity
+    from candix.report.builder import ReportBuilder
+
+    inputs = [Path(item) for item in args.inputs]
+    for path in inputs:
+        if not path.exists():
+            raise CandixError(f"report input not found: {path}")
+    written: list[dict[str, Any]] = []
+    for path in inputs:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        model = ReportModel.from_snapshot(payload, min_severity=select_min_severity(args.min_severity))
+        if args.title:
+            model.title = args.title
+        builder = ReportBuilder(model, include_evidence=not args.no_evidence)
+        bundle = builder.write(
+            args.out,
+            parse_formats(args.formats),
+            archive=args.archive,
+        )
+        written.append(bundle.to_dict())
+    if len(inputs) == 2 and args.compare:
+        from candix.report.compare import compare_snapshots, render_comparison_markdown
+
+        comparison = compare_snapshots(
+            json.loads(inputs[0].read_text(encoding="utf-8")),
+            json.loads(inputs[1].read_text(encoding="utf-8")),
+        )
+        document = render_comparison_markdown(comparison)
+        target = Path(args.out) / "comparison.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(document, encoding="utf-8")
+        if not args.json_output:
+            echo(document)
+            echo(out.kv_table([("written", str(target))], indent=2))
+    if args.json_output:
+        out.print_json({"bundles": written})
+        return EXIT_OK
+    for bundle in written:
+        echo(out.rule(Path(bundle["artifacts"][0]["path"]).stem))
+        echo(out.kv_table([(item["format"], item["path"]) for item in bundle["artifacts"]], indent=2))
+    return EXIT_OK
+
+
+def cmd_authorize(args: Any) -> int:
+    document = build_authorization(
+        engagement=args.engagement,
+        client=args.client,
+        operator=args.operator,
+        authorized_by=args.authorized_by,
+        include=args.include,
+        exclude=args.exclude,
+        expires_in_days=args.expires_in_days,
+        allow_exploit=args.allow_exploit,
+        allow_intrusive=not args.no_intrusive,
+        max_rps=args.max_rps,
+    )
+    if args.contact:
+        document["authorization"]["contact"] = args.contact
+    if args.reference:
+        document["authorization"]["reference"] = args.reference
+    path = Path(args.out or Path("engagements") / f"{args.engagement}.json")
+    write_engagement(path, document)
+    if args.json_output:
+        out.print_json({"path": str(path), "document": document})
+        return EXIT_OK
+    echo(out.rule("authorization written"))
+    echo(out.kv_table([
+        ("file", str(path)),
+        ("engagement", args.engagement),
+        ("client", args.client),
+        ("approved by", args.authorized_by),
+        ("in scope", ", ".join(args.include)),
+        ("excluded", ", ".join(args.exclude) or "none"),
+        ("exploitation", "permitted" if args.allow_exploit else "not permitted"),
+        ("valid for", f"{args.expires_in_days} days"),
+    ], indent=2))
+    echo("")
+    echo(out.paint("  Share this file with the scan operator; it is the only thing that unlocks active testing.", "grey"))
+    return EXIT_OK
+
+
+def cmd_detectors(args: Any) -> int:
+    from candix.detectors.base import detector_catalog, summarize_detectors
+
+    catalog = detector_catalog()
+    if args.category:
+        catalog = [item for item in catalog if item["category"] == args.category]
+    if args.json_output:
+        out.print_json({"summary": summarize_detectors(), "detectors": catalog})
+        return EXIT_OK
+    summary = summarize_detectors()
+    echo(out.rule("detectors"))
+    echo(out.kv_table([
+        ("total", summary.get("total", len(catalog))),
+        ("categories", ", ".join(f"{name} ({count})" for name, count in (summary.get("categories") or {}).items())),
+    ], indent=2))
+    echo("")
+    rows = []
+    for item in sorted(catalog, key=lambda entry: (entry["category"], entry["id"])):
+        rows.append([
+            item["id"],
+            item["category"],
+            item["severity"],
+            "yes" if item.get("intrusive") else "no",
+            ", ".join(item.get("cwe", [])[:2]),
+        ])
+    echo(out.table(["ID", "CATEGORY", "SEVERITY", "INTRUSIVE", "CWE"], rows))
+    if args.verbose:
+        echo("")
+        for item in sorted(catalog, key=lambda entry: entry["id"]):
+            echo(f"  {out.paint(item['id'], 'cyan', bold=True)} — {item['name']}")
+            echo(out.wrap(item.get("description", ""), indent="    "))
+    return EXIT_OK
+
+
+def cmd_payloads(args: Any) -> int:
+    from candix.catalog.payloads import families, get_payloads, payload_count
+
+    names = families()
+    if args.json_output:
+        payload: dict[str, Any] = {"families": names, "count": payload_count()}
+        if args.family:
+            payload["payloads"] = get_payloads(args.family)[: args.limit]
+        out.print_json(payload)
+        return EXIT_OK
+    echo(out.rule("payload catalogue"))
+    echo(out.kv_table([("families", len(names)), ("payloads", payload_count())], indent=2))
+    if not args.family:
+        echo("")
+        echo(out.table(["FAMILY", "PAYLOADS"], [[name, len(get_payloads(name))] for name in names]))
+        echo("")
+        echo(out.paint("  candix payloads <family> --limit 10", "grey"))
+        return EXIT_OK
+    if args.family not in names:
+        raise ConfigError(f"unknown payload family: {args.family}", available=", ".join(names))
+    echo("")
+    for index, payload in enumerate(get_payloads(args.family)[: args.limit], start=1):
+        echo(f"  {index:>3}. {payload}")
+    return EXIT_OK
+
+
+def cmd_lab(args: Any) -> int:
+    from candix.lab import build_server
+    from candix.engine import scan
+
+    server = build_server(args.host, args.port)
+    server.start()
+    base = server.base_url
+    echo(out.rule("lab running"))
+    echo(out.kv_table([("url", base), ("host", args.host), ("port", str(server.port))], indent=2))
+    echo(out.paint("  This application is intentionally vulnerable. It binds to loopback only.", "yellow"))
+    try:
+        if args.scan:
+            echo("")
+            config = load_config(args)
+            config.set("scan.max_rps", max(200.0, float(config.get("scan.max_rps") or 0)))
+            config.set("exploit.enabled", True)
+            config.set("exploit.max_proofs", args.max_proofs)
+            document = build_authorization(
+                engagement="lab",
+                client="candix",
+                operator="candix-cli",
+                authorized_by="candix-cli",
+                include=[f"{args.host}:{server.port}"],
+                allow_exploit=True,
+                max_rps=200.0,
+            )
+            engagement = Engagement.from_document(document)
+            progress = ScanProgress(verbose=bool(getattr(args, "verbose", False)), quiet=bool(getattr(args, "quiet", False)))
+            result = scan([base], config=config, engagement=engagement, exploit=True, on_progress=progress.handle)
+            _summarise(result, json_output=bool(getattr(args, "json_output", False)))
+            args.__dict__["formats"] = args.formats
+            _write_reports(result, args, scan_id=result.context.id)
+        if args.serve:
+            echo("")
+            echo(out.paint("  serving until interrupted (Ctrl-C)", "grey"))
+            while True:
+                time.sleep(0.5)
+    except KeyboardInterrupt:
+        echo("")
+        echo(out.paint("  stopping lab", "grey"))
+    finally:
+        server.stop()
+    return EXIT_OK
+
+
+def cmd_fuzz(args: Any) -> int:
+    from candix.fuzz.runner import run_fuzz
+    from candix.fuzz.report import render_fuzz_summary
+
+    config = load_config(args)
+    engagement = load_engagement(args, list(args.targets), allow_exploit=False)
+    result = run_fuzz(
+        list(args.targets),
+        config=config,
+        engagement=engagement,
+        iterations=args.iterations,
+        strategy=args.strategy,
+        seed=args.seed,
+        params=split_csv(",".join(args.param)),
+        save_corpus=args.save_corpus,
+        stop_on_finding=args.stop_on_finding,
+    )
+    if args.json_output:
+        out.print_json(result.to_dict())
+        return EXIT_OK
+    echo(render_fuzz_summary(result))
+    if result.findings:
+        return EXIT_FINDINGS
+    return EXIT_OK
+
+
+def cmd_tui(args: Any) -> int:
+    from candix.tui.app import run_tui
+
+    config = load_config(args)
+    targets = list(args.targets)
+    engagement = load_engagement(args, targets, allow_exploit=bool(args.exploit)) if targets else None
+    return run_tui(
+        targets,
+        config=config,
+        engagement=engagement,
+        exploit=bool(args.exploit),
+        max_proofs=args.max_proofs,
+    )
+
+
+def cmd_doctor(args: Any) -> int:
+    checks: list[dict[str, Any]] = []
+
+    def record(name: str, status: str, detail: str) -> None:
+        checks.append({"check": name, "status": status, "detail": detail})
+
+    record("python", "ok" if sys.version_info >= (3, 10) else "warn", sys.version.split()[0])
+    try:
+        from candix import build_context  # noqa: F401
+
+        record("package", "ok", f"candix {VERSION} importable")
+    except Exception as exc:
+        record("package", "error", str(exc))
+    try:
+        config = Config.defaults()
+        config.validate()
+        record("config", "ok", f"{len(config.to_dict())} sections, {len(PROFILES)} profiles")
+    except Exception as exc:
+        record("config", "error", str(exc))
+    try:
+        from candix.detectors.base import summarize_detectors
+
+        summary = summarize_detectors()
+        total = summary.get("total", 0)
+        record("detectors", "ok" if total else "warn", f"{total} detectors across {len(summary.get('categories') or {})} categories")
+    except Exception as exc:
+        record("detectors", "error", str(exc))
+    try:
+        from candix.lab import build_server
+
+        server = build_server("127.0.0.1", 0).start()
+        try:
+            probe = socket.create_connection(("127.0.0.1", server.port), timeout=2)
+            probe.close()
+            record("loopback", "ok", f"lab responded on 127.0.0.1:{server.port}")
+        finally:
+            server.stop()
+    except Exception as exc:
+        record("loopback", "error", str(exc))
+    artifacts = Path(os.environ.get("CANDIX_HOME", "artifacts"))
+    try:
+        artifacts.mkdir(parents=True, exist_ok=True)
+        probe_file = artifacts / ".write-test"
+        probe_file.write_text("ok", encoding="utf-8")
+        probe_file.unlink()
+        record("artifacts", "ok", str(artifacts.resolve()))
+    except Exception as exc:
+        record("artifacts", "error", str(exc))
+    try:
+        from candix.net.dns import resolve
+
+        addresses = resolve("example.com")
+        record("dns", "ok" if addresses else "warn", ", ".join(addresses[:2]) or "no answer")
+    except Exception as exc:
+        record("dns", "warn", str(exc))
+    if args.json_output:
+        out.print_json({"checks": checks, "version": VERSION})
+        return EXIT_OK
+    echo(out.rule("doctor"))
+    for item in checks:
+        color = {"ok": "green", "warn": "yellow", "error": "red"}.get(item["status"], "grey")
+        echo(f"  {out.paint(item['status'].upper().ljust(5), color)} {item['check'].ljust(12)} {item['detail']}")
+    failures = [item for item in checks if item["status"] == "error"]
+    echo("")
+    echo(out.paint(f"  {len(checks) - len(failures)}/{len(checks)} checks passed", "green" if not failures else "red"))
+    return EXIT_OK if not failures else EXIT_ERROR
+
+
+def cmd_config(args: Any) -> int:
+    config = Config.load(args.config, profile=args.profile)
+    payload = config.to_dict()
+    if args.section:
+        payload = {args.section: payload.get(args.section, {})}
+    if args.json_output:
+        out.print_json(payload)
+        return EXIT_OK
+    echo(out.rule("configuration"))
+    for section, values in payload.items():
+        echo("")
+        echo(out.paint(f"  [{section}]", "cyan", bold=True))
+        if isinstance(values, dict):
+            for key, value in values.items():
+                if isinstance(value, dict):
+                    continue
+                echo(f"    {key.ljust(24)} {value}")
+        else:
+            echo(f"    {values}")
+    return EXIT_OK
+
+
+def cmd_api(args: Any) -> int:
+    from candix.api.server import ApiConfig, ApiServer
+
+    config = ApiConfig(
+        host=args.host,
+        port=args.port,
+        token=args.token if args.token is not None else os.environ.get("CANDIX_API_TOKEN", ""),
+        allow_anonymous=bool(args.allow_anonymous),
+        artifacts_dir=args.artifacts,
+        cors_origin=args.cors_origin,
+    )
+    server = ApiServer(config)
+    server.start()
+    if args.json_output:
+        out.print_json({"url": server.base_url, "authenticated": bool(config.token), "artifacts": config.artifacts_dir})
+        return EXIT_OK
+    echo(out.rule("candix api"))
+    echo(out.kv_table([
+        ("url", server.base_url),
+        ("auth", "bearer token" if config.token else "anonymous (local only)"),
+        ("artifacts", config.artifacts_dir),
+        ("workers", config.max_workers),
+    ], indent=2))
+    echo("")
+    echo(out.paint("  POST /scans with {\"targets\": [...], \"authorized\": \"name\"} to queue a scan.", "grey"))
+    echo(out.paint("  Ctrl-C stops the server.", "grey"))
+    try:
+        while True:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        echo("")
+        echo(out.paint("  stopping api", "grey"))
+    finally:
+        server.stop()
+    return EXIT_OK
+
+
+def cmd_notify(args: Any) -> int:
+    from candix.integrations.base import Notification, build, load_plugins
+    from candix.integrations.siem import render as render_siem
+
+    load_plugins()
+    payload = json.loads(Path(args.report).read_text(encoding="utf-8"))
+    notification = Notification.from_report(payload, link=args.link)
+    results: list[dict[str, Any]] = []
+    if args.siem_format:
+        rendered = render_siem(payload, args.siem_format, min_severity=args.min_severity)
+        if args.json_output:
+            results.append({"siem": args.siem_format, "events": rendered.count("\n") + 1})
+        else:
+            echo(out.rule(f"siem export · {args.siem_format}"))
+            echo(rendered)
+    for name in args.integration:
+        integration = build(
+            name,
+            endpoint=args.endpoint,
+            token=args.token,
+            secret=args.secret,
+            project=args.project,
+            dry_run=not args.endpoint,
+        )
+        result = integration.send(notification)
+        results.append(result.to_dict())
+        if not args.json_output:
+            status = out.paint("sent", "green") if result.ok else out.paint("failed", "red")
+            echo(f"  {name.ljust(12)} {status} {result.reference or result.message}")
+    if args.json_output:
+        out.print_json({"results": results})
+    return EXIT_OK if all(item.get("ok", True) for item in results) else EXIT_ERROR
+
+
+def cmd_playbooks(args: Any) -> int:
+    from candix.playbooks import for_report, playbook as lookup, playbook_ids, render_playbook_markdown
+    from candix.playbooks.engine import PlaybookMatch
+
+    if args.for_report:
+        payload = json.loads(Path(args.for_report).read_text(encoding="utf-8"))
+        matches = for_report(payload)
+        if args.json_output:
+            out.print_json({"matches": [match.to_dict() for match in matches]})
+            return EXIT_OK
+        echo(out.rule("playbooks for report"))
+        for match in matches:
+            echo(render_playbook_markdown(match))
+            echo("")
+        return EXIT_OK
+    ids = args.ids or playbook_ids()
+    selected = []
+    for identifier in ids:
+        book = lookup(identifier)
+        if book is None:
+            sys.stderr.write(f"unknown playbook: {identifier}\n")
+            continue
+        selected.append(PlaybookMatch(playbook=book, finding_ids=[], severity=book.severity_hint, reason="manual selection"))
+    if args.json_output:
+        out.print_json({"playbooks": [match.to_dict() for match in selected]})
+        return EXIT_OK
+    for match in selected:
+        echo(render_playbook_markdown(match))
+        echo("")
+    return EXIT_OK
+
+
+def cmd_shell(args: Any) -> int:
+    from candix.cli.repl import run_shell
+
+    config = load_config(args)
+    return run_shell(list(args.targets), config=config, authorized=args.authorized)
+
+
+def cmd_export(args: Any) -> int:
+    from candix.report.export import export_bundle, remediation_tracker
+    from candix.report.junit import junit_summary, render_junit
+    from candix.report.model import ReportModel
+    from candix.report.notebook import render_notebook
+    from candix.report.slides import render_slides
+    from candix.integrations.siem import render as render_siem
+    from candix.exploit.replay import package_from_proof
+
+    payload = json.loads(Path(args.report).read_text(encoding="utf-8"))
+    model = ReportModel.from_snapshot(payload)
+    outdir = Path(args.out)
+    outdir.mkdir(parents=True, exist_ok=True)
+    written: dict[str, str] = {}
+    any_selected = any([args.tracker, args.junit, args.notebook, args.slides, args.replay, args.siem])
+    if args.tracker or not any_selected:
+        written.update(export_bundle(model, str(outdir)))
+    if args.junit:
+        path = outdir / f"junit-{model.scan_id}.xml"
+        path.write_text(render_junit(model, fail_on=args.fail_on), encoding="utf-8")
+        written["junit"] = str(path)
+    if args.notebook:
+        path = outdir / f"notebook-{model.scan_id}.ipynb"
+        path.write_text(render_notebook(model), encoding="utf-8")
+        written["notebook"] = str(path)
+    if args.slides:
+        path = outdir / f"slides-{model.scan_id}.md"
+        path.write_text(render_slides(model), encoding="utf-8")
+        written["slides"] = str(path)
+    if args.siem:
+        path = outdir / f"siem-{model.scan_id}.{args.siem}"
+        path.write_text(render_siem(payload, args.siem), encoding="utf-8")
+        written["siem"] = str(path)
+    if args.replay:
+        replay_dir = outdir / "replay"
+        replay_dir.mkdir(exist_ok=True)
+        count = 0
+        for proof in payload.get("proofs") or []:
+            package = package_from_proof(proof)
+            if not package.steps or not package.steps[0].url:
+                continue
+            for kind, path in package.write(replay_dir).items():
+                written[f"replay_{count}_{kind}"] = path
+            count += 1
+    summary = junit_summary(model, fail_on=args.fail_on) if args.fail_on != "none" else {"exit_code": 0, "failures": 0}
+    if args.json_output:
+        out.print_json({"written": written, "exit_code": summary["exit_code"], "rows": len(remediation_tracker(model))})
+        return int(summary["exit_code"])
+    echo(out.rule("export"))
+    echo(out.kv_table([(key, str(value)) for key, value in written.items()], indent=2))
+    echo("")
+    echo(out.paint(f"  {len(remediation_tracker(model))} tracker rows · {summary.get('failures', 0)} CI failures", "grey"))
+    return int(summary["exit_code"])
+
+
+def cmd_compare(args: Any) -> int:
+    from candix.report.compare import compare_snapshots, render_comparison_markdown
+
+    before = json.loads(Path(args.before).read_text(encoding="utf-8"))
+    after = json.loads(Path(args.after).read_text(encoding="utf-8"))
+    comparison = compare_snapshots(before, after)
+    if args.json_output:
+        out.print_json(comparison)
+    else:
+        document = render_comparison_markdown(comparison)
+        echo(document)
+        if args.out:
+            Path(args.out).write_text(document, encoding="utf-8")
+            echo(out.kv_table([("written", args.out)], indent=2))
+    return EXIT_FINDINGS if comparison["counts"]["new"] else EXIT_OK
+
+
+def cmd_version(args: Any) -> int:
+    info = {
+        "version": VERSION,
+        "python": sys.version.split()[0],
+        "platform": sys.platform,
+        "executable": sys.executable,
+        "authorization_notice": AUTHORIZATION_NOTICE.strip(),
+    }
+    if args.json_output:
+        out.print_json(info)
+        return EXIT_OK
+    echo(out.banner(VERSION))
+    echo("")
+    echo(out.kv_table([
+        ("version", VERSION),
+        ("python", info["python"]),
+        ("platform", info["platform"]),
+        ("executable", info["executable"]),
+    ], indent=2))
+    return EXIT_OK
+
+
+COMMANDS = {
+    "scan": cmd_scan,
+    "exploit": cmd_exploit,
+    "report": cmd_report,
+    "authorize": cmd_authorize,
+    "detectors": cmd_detectors,
+    "payloads": cmd_payloads,
+    "lab": cmd_lab,
+    "fuzz": cmd_fuzz,
+    "tui": cmd_tui,
+    "doctor": cmd_doctor,
+    "config": cmd_config,
+    "compare": cmd_compare,
+    "shell": cmd_shell,
+    "export": cmd_export,
+    "api": cmd_api,
+    "notify": cmd_notify,
+    "playbooks": cmd_playbooks,
+    "version": cmd_version,
+}
