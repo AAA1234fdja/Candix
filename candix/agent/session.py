@@ -20,6 +20,7 @@ from candix.agent.budget import AgentBudget, BudgetLimits
 from candix.agent.facts import FactStore
 from candix.agent.graph import AssetGraph, ExplorationGraph, LinkedGraphs
 from candix.agent.guard import DenyList, OutputGuard, RedLines, SafetyDecision, ScopeGuard
+from candix.agent.harness import Harness, HarnessSettings
 from candix.agent.journal import Journal, NullJournal
 from candix.agent.loop import AgentLoop, LoopConfig
 from candix.agent.memory import MemoryStore
@@ -66,6 +67,16 @@ class AgentSettings:
     explore_ratio: float = 0.3
     priors_path: str = ""
     use_priors: bool = True
+    gate: bool = True
+    gate_max_risk: int = 70
+    allow_commands: tuple[str, ...] = ()
+    allow_private: bool = False
+    notify_config: dict[str, Any] = field(default_factory=dict)
+    notify_min_severity: str = "high"
+    poc: bool = True
+    review: bool = True
+    todos: bool = True
+    targeting: bool = True
 
     def loop_config(self) -> LoopConfig:
         return LoopConfig(max_intents_per_turn=self.max_intents_per_turn, max_turns=self.max_turns, verify_before_finish=self.verify)
@@ -82,6 +93,16 @@ class AgentSettings:
             "adaptive_strategy": self.adaptive_strategy,
             "success_criteria": list(self.success_criteria),
             "limits": self.limits.to_dict(),
+            "gate": self.gate,
+            "gate_max_risk": self.gate_max_risk,
+            "allow_commands": list(self.allow_commands),
+            "allow_private": self.allow_private,
+            "notify": sorted(self.notify_config.keys()),
+            "notify_min_severity": self.notify_min_severity,
+            "poc": self.poc,
+            "review": self.review,
+            "todos": self.todos,
+            "targeting": self.targeting,
         }
 
 
@@ -130,8 +151,26 @@ class AgentSession:
         else:
             self.journal = NullJournal()
         self.policy = RiskPolicy(autonomy=settings.autonomy, exploit_enabled=settings.exploit)
+        self.harness = Harness(
+            targets=self.targets,
+            settings=HarnessSettings(
+                gate=settings.gate,
+                allowed_prefixes=tuple(settings.allow_commands),
+                max_risk=settings.gate_max_risk,
+                allow_private=settings.allow_private,
+                notify=dict(settings.notify_config),
+                notify_min_severity=settings.notify_min_severity,
+                poc=settings.poc,
+                review=settings.review,
+                todos=settings.todos,
+                targeting=settings.targeting,
+                artifacts=settings.artifacts_dir,
+            ),
+        )
+        self.harness_summary: dict[str, Any] = {}
         self.tool_context = ToolContext(
             guard=guard,
+            interceptor=self.harness,
             output_guard=OutputGuard(),
             budget=self.budget,
             telemetry=self.telemetry,
@@ -326,10 +365,16 @@ class AgentSession:
             config=self.settings.loop_config(),
             on_event=self.on_event,
             run_id=self.id,
+            harness=self.harness,
         )
         started = time.time()
         result = loop.run()
         result.finished_at = time.time()
+        try:
+            self.harness_summary = self.harness.finish(result, self)
+        except Exception as error:  # the run's evidence matters more than its packaging
+            self.harness_summary = {"error": f"{type(error).__name__}: {error}"}
+            self.telemetry.increment("harness.finish_failed")
         self._learn_from_run(result)
         try:
             lessons = reflect(result, telemetry=self.telemetry, memory=self.memory, journal=self.journal)
@@ -393,6 +438,7 @@ class AgentSession:
                 {"name": node.label, **(node.attributes or {})} for node in self.assets.of_kind("technology")
             ],
             "scope_directives": self._scope_directives(),
+            "harness": self.harness_summary or self.harness.summary(),
             "engagement": dict(self.tool_context.state.get("engagement_summary") or {}),
         }
         adaptive = getattr(self, "_adaptive", None)

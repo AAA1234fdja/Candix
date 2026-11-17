@@ -146,6 +146,23 @@ def build_parser() -> Parser:
     agent.add_argument("--metrics", default="", help="write Prometheus metrics to this path")
     agent.add_argument("--resume", default="", help="resume from a saved session state (JSON)")
     agent.add_argument("--dry-run", action="store_true", help="plan and gate only; execute nothing")
+    agent.add_argument("--no-gate", action="store_true", help="disable the intercept gate (risk and target checks)")
+    agent.add_argument("--gate-max-risk", type=int, default=70, help="risk at or above which a tool call is refused")
+    agent.add_argument("--allow-command", action="append", default=[], metavar="PREFIX",
+                       help="argv prefix the gate may allow for command tools (repeatable)")
+    agent.add_argument("--allow-private", action="store_true", help="permit private and loopback targets outside the engagement")
+    agent.add_argument("--notify-webhook", default="", help="POST the run summary to this webhook")
+    agent.add_argument("--notify-slack", default="", help="Slack incoming webhook for the run summary")
+    agent.add_argument("--notify-file", default="", help="append the run summary to this file")
+    agent.add_argument("--notify-command", action="append", default=[], metavar="CMD",
+                       help="run this command with the summary on stdin (gated, repeatable)")
+    agent.add_argument("--notify-min-severity", default="high",
+                       choices=["info", "low", "medium", "high", "critical"],
+                       help="only notify when a finding reaches this severity")
+    agent.add_argument("--no-poc", action="store_true", help="skip the proof-of-concept bundle")
+    agent.add_argument("--no-review", action="store_true", help="skip the reviewer board")
+    agent.add_argument("--no-todos", action="store_true", help="do not keep a todo list")
+    agent.add_argument("--no-targeting", action="store_true", help="do not rank endpoints for the planner")
     _add_common(agent)
     _add_scope(agent)
 
@@ -275,6 +292,26 @@ def build_parser() -> Parser:
     agent_diff.add_argument("--allow-new", type=int, default=0, help="how many new findings of that severity are tolerated")
     agent_diff.add_argument("--out", default="", help="write the markdown table here")
     agent_diff.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+
+    gate = subparsers.add_parser("gate", help="ask the intercept gate what it would do with a command")
+    gate.add_argument("argv", nargs="+", help="command to score (quote it or pass tokens)")
+    gate.add_argument("--target", action="append", default=[], help="target the command would touch (repeatable)")
+    gate.add_argument("--allow-prefix", action="append", default=[], metavar="PREFIX",
+                      help="argv prefix rule to try (repeatable)")
+    gate.add_argument("--max-risk", type=int, default=70, help="risk at or above which the command is refused")
+    gate.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+
+    harness = subparsers.add_parser("harness", help="show every capability wired to a run")
+    harness.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
+    harness.add_argument("--target", action="append", default=[], help="check this target against a fresh target gate")
+    harness.add_argument("--run", default="", help="read the harness block from a saved run session.json")
+
+    review = subparsers.add_parser("review", help="work with the reviewer board of a finished run")
+    review.add_argument("path", help="run directory or review.json")
+    review.add_argument("--approve", action="store_true", help="approve every review whose checklist is complete")
+    review.add_argument("--reviewer", default=os.environ.get("USER", "operator"), help="name recorded on approval")
+    review.add_argument("--markdown", action="store_true", help="print the board as markdown")
+    review.add_argument("--json", dest="json_output", action="store_true", help="machine-readable output")
 
     version = subparsers.add_parser("version", help="print the version and build information")
     version.add_argument("--json", dest="json_output", action="store_true")

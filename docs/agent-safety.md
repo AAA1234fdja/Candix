@@ -82,6 +82,26 @@ the HTTP client:
 * `TargetGate.check(url)` — normalises the target (IDNA, IPv4-mapped, hex/octal,
   CIDR, default ports) and refuses anything outside the declared scope, plus the
   cloud metadata plane.
-* `notify.CommandChannel` runs the gate before `subprocess`.
+* `notify.CommandChannel` runs the gate before `subprocess`, and the gate reads
+  the targets out of the argv (`curl https://metadata.google.internal` is a
+  target decision, not a risk decision).
+
+The gate is **in the run path, not next to it**: `AgentSession` builds a
+`Harness` (the composition root in `candix/agent/harness.py`), the harness owns
+the `CommandGate`/`TargetGate`, and `ToolRegistry._preflight` asks it about every
+tool call - after the scope guard, before the handler. A refused call never
+reaches the tool, returns the reason to the model as an error, increments
+`tools.blocked` and lands in the journal and in the run snapshot. A gate that
+raises fails closed.
+
+```console
+$ candix gate "rm -rf /"            # exit 10, rule denylist
+$ candix gate "git config --global core.pager less"
+$ candix gate curl http://169.254.169.254/latest --json
+```
+
+Disable it only for a run you already know is in scope: `candix agent ... --no-gate`
+or lower the ceiling with `--gate-max-risk 50`. Command tools can be allowed a
+prefix with `--allow-command`; the always-deny list still wins.
 
 Design notes and the ARTEX files this follows: `docs/vendor-artex.md`.

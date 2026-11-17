@@ -33,6 +33,7 @@ facts with provenance, and calls `goal.prove` before finishing.
 * SARIF, HTML, JUnit and Markdown reports from the same run
 
 Documentation: [`docs/agent.md`](docs/agent.md),
+[`docs/harness.md`](docs/harness.md),
 [`docs/agent-safety.md`](docs/agent-safety.md),
 [`docs/agent-runbook.md`](docs/agent-runbook.md),
 [`docs/llm.md`](docs/llm.md),
@@ -88,6 +89,10 @@ Exit codes are stable for pipelines: `0` clean, `10` findings at or above the th
 | `compare` | diff two scans to find new and resolved findings |
 | `api` | HTTP API for CI pipelines |
 | `notify` | send results to chat, ticketing and SIEM integrations |
+| `agent` | autonomous run: plan, gate, act, prove, report |
+| `gate` | ask the intercept gate what it would do with a command |
+| `harness` | list every capability wired to a run, or read a run's harness block |
+| `review` | reviewer board of a finished run: status, approval, markdown |
 | `shell` | interactive shell with ad-hoc request replay |
 | `tui` | terminal dashboard |
 | `lab` | run the vulnerable lab application |
