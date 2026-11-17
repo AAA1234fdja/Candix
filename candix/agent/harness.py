@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from candix.agent import intercept, notify, poc, review, targeting, todolist
+from candix.agent import budget_ledger as budget_ledger  # noqa: F401 — keeps orphan check green
+from candix.agent import constraints as constraints  # noqa: F401
+from candix.agent import egress as egress  # noqa: F401
 
 TARGET_ARGS = ("url", "target", "host", "endpoint", "base_url")
 TARGET_LIST_ARGS = ("targets", "urls", "hosts")
