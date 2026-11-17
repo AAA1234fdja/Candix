@@ -68,3 +68,20 @@ techniques from the catalogue with inert payloads.
 - Send a destructive payload, even against a lab profile.
 - Continue after an approval is refused.
 - Report a finding as proven without a fact that came from a response or a tool.
+
+
+## Command and target gate
+
+`candix/agent/intercept.py` is the last line before anything executes outside
+the HTTP client:
+
+* `CommandGate.check(command)` — argv prefix must match an allow rule when rules
+  exist, the program must not be an interpreter, launcher, package manager or
+  destructive tool (that denylist is code-owned and cannot be configured away),
+  and the deterministic risk score must stay below the ceiling.
+* `TargetGate.check(url)` — normalises the target (IDNA, IPv4-mapped, hex/octal,
+  CIDR, default ports) and refuses anything outside the declared scope, plus the
+  cloud metadata plane.
+* `notify.CommandChannel` runs the gate before `subprocess`.
+
+Design notes and the ARTEX files this follows: `docs/vendor-artex.md`.

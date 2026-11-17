@@ -24,6 +24,9 @@ candix = "candix.cli.main:main"
 
 [tool.setuptools.packages.find]
 include = ["candix*"]
+# vendor/ holds AGPL-3.0 reference material and is never packaged: see
+# vendor/artex-reference/NOTICE.md
+exclude = ["vendor*", "tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

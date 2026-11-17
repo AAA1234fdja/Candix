@@ -149,17 +149,34 @@ class DiscordWebhook(WebhookChannel):
 
 
 class CommandChannel(Channel):
-    """Run a local command with the message on stdin; useful for pager bridges."""
+    """Run a local command with the message on stdin; useful for pager bridges.
+
+    The command is gated by :class:`candix.agent.intercept.CommandGate` before it
+    runs: an interpreter, a launcher or a destructive command is refused even
+    when the operator configured the channel.
+    """
 
     name = "command"
 
-    def __init__(self, argv: list[str], *, timeout: float = 20.0) -> None:
+    def __init__(self, argv: list[str], *, timeout: float = 20.0, allowed_prefixes: Iterable[str] = (), max_risk: int = 70, gate: Any = None) -> None:
         self.argv = argv
         self.timeout = timeout
+        self.gate = gate
+        self.allowed_prefixes = tuple(allowed_prefixes)
+        self.max_risk = max_risk
+
+    def _decide(self) -> Any:
+        from candix.agent.intercept import CommandGate
+
+        gate = self.gate or CommandGate(allowed_prefixes=self.allowed_prefixes, max_risk=self.max_risk)
+        return gate.check(" ".join(self.argv))
 
     def send(self, message: Message) -> Delivery:
         import subprocess
 
+        decision = self._decide()
+        if not decision.allowed:
+            return Delivery(self.name, False, f"blocked: {decision.reason}")
         try:
             done = subprocess.run(
                 self.argv,
