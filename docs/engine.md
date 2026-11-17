@@ -1,8 +1,8 @@
-# The engine tree
+# The engine tree — interconectado a la par (39 wired)
 
 `engine/` is the Go backend and React console from Artex, kept as a
-**renamed fork**. Desde esta rama ya no está archivado — está **interconectado
-a la par** con Python vía `candix.engine_bridge`:
+**renamed fork** y **totalmente conectado**. Desde `3cca3bf→67d5e5f` ya no está archivado — está **interconectado
+a la par** vía `candix.engine_bridge` + `candix/engine_adapter` (17 sub-motores):
 
 * **Sin Go (CI/air-gapped)**: solo Python, cero dependencias externas.
 * **Con Go**: Python y Go corren **en paralelo** por cada veredicto, no uno
@@ -128,19 +128,29 @@ El subprocess usa binario cacheado `.cache/candix-bridge` (compilado una vez ví
 separado (subprocess/HTTP), sin linking: un wheel sin `engine/` es MIT; distribuir
 `engine/` obliga AGPL y a ofrecer el fuente. Ver `engine/NOTICE.md`.
 
-## Dónde Candix espeja el engine (todo a la par)
+## Dónde Candix espeja el engine (todo a la par — 17 sub-motores, 39 capabilities)
 
 | Engine | Candix | Modo |
 | --- | --- | --- |
-| `engine/intercept/` | `candix/agent/intercept.py` | ✅ paralelo `score_dual`/`merge_risk` |
-| `engine/guard/` | `candix/agent/guard.py`, `candix/agent/policy.py` | ✅ paralelo `InterceptProxy.check_command_gate` |
-| `engine/agent/budget.go` | `candix/agent/budget.py` | espejo + validación Go vía `EngineClient.health` |
-| `engine/agent/untrusted_prompt.go`, `data_envelope.go` | `candix/agent/tools.py`, `candix/llm/guardrails.py` | espejo |
-| `engine/agent/planner.go`, `worker.go` | `candix/agent/planner.py`, `worker.py`, `adaptive.py` | espejo |
-| `engine/egress/` | `candix/net/ratelimit.py` | espejo |
-| `engine/evidence/` | `candix/agent/evidence_chain.py` | espejo |
-| `engine/traffic/` | proxy Go | vía `launcher` HTTP |
-| `engine/server/` | `candix/api/server.py` | vía `EngineClient` |
+| `engine/intercept/` | `candix/agent/intercept.py` + `candix/engine_adapter/intercept_ext.py` | ✅ paralelo `score_dual`/`merge_risk` + target/argv/alwaysAllow |
+| `engine/guard/` | `candix/agent/guard.py` + `candix/engine_adapter/guard.py` (ring 2000 + targetOnly) | ✅ paralelo `InterceptProxy` |
+| `engine/agent/budget.go` | `candix/agent/budget_ledger.py` (BudgetLedger hierárquico task→intent + wrap-up) + `candix/agent/budget.py` | ✅ paralelo `budget-new`/`budget-state` |
+| `engine/agent/constraints` | `candix/agent/constraints.py` + `candix/engine_adapter/agent_gateway.py` | ✅ `agent-constraints` |
+| `engine/agent/planner,worker,toolcatalog` | `candix/agent/planner.py,worker.py` + `candix/engine_adapter/agent_gateway.py` | espejo + gateway |
+| `engine/egress/` + `pace.go` | `candix/agent/egress.py` (Governor token-bucket + jitter) + `candix/engine_adapter/egress_ext.py` | ✅ `egress-profile/governor` |
+| `engine/evidence/` | `candix/agent/evidence_chain.py` + `candix/engine_adapter/evidence.py` | espejo |
+| `engine/traffic/` | `candix/engine_adapter/traffic.py` (MITM file-tree + SQLite) + `launcher` | ✅ `traffic-validate` |
+| `engine/server/` | `candix/engine_adapter/server_client.py` (tasks/assets/findings/intercept/LLM/traffic) | vía HTTP |
+| `engine/db/` | `candix/engine_adapter/db.py` (PG + SQLite fallback, explorations/assets/findings) | vía PG/HTTP |
+| `engine/enrich/` | `candix/engine_adapter/enrich.py` (DNS + HTTP probe pool) | espejo |
+| `engine/notify/` | `candix/engine_adapter/notify_ext.py` (webhook/dingtalk/feishu/telegram/email + dispatcher) | espejo |
+| `engine/report/` | `candix/engine_adapter/report.py` (Markdown + quality) | espejo |
+| `engine/mcphttp/` | `candix/engine_adapter/mcp_bridge.py` (Streamable HTTP + SSE, `mcp__server__tool`) | espejo |
+| `engine/sidequestion/` | `candix/engine_adapter/sidequestion.py` | espejo |
+| `engine/llmrec/` | `candix/engine_adapter/llmrec.py` (usage + body recording) | espejo |
+| `engine/extension/` | `candix/engine_adapter/extension.py` (browser capture sessions) | espejo |
+| `engine/llmpool/` | `candix/engine_adapter/llmpool.py` | vía HTTP |
+| `engine/config/` | `candix/engine_adapter/config_adapter.py` + `candix/core/config.py [engine]` | espejo |
 
 Python y Go reimplementan el comportamiento sin copiar código — ahora **ambos
 corren y se reconcilian en cada veredicto**, no uno delegado al otro.

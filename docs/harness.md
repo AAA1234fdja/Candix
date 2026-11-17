@@ -17,6 +17,8 @@ policy      candix.agent.policy          wired
 ...
 ```
 
+`python -m candix harness` hoy reporta **39/39 wired** (17 `engine-*` + 22 Python nativos). Ver `candix/engine_adapter/orchestrator.py:Engine.health()` para el detalle de 17 sub-motores.
+
 `Harness` is a composition root, not a new layer of decisions:
 
 * it decides nothing the gate or the policy does not already decide;
