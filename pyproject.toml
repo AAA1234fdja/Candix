@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "candix"
+version = "0.1.0"
+description = "Authorization-gated red team harness: discovery, verification, exploitation and remediation reporting"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Candix"}]
+keywords = ["security", "red-team", "pentest", "scanner", "reporting"]
+classifiers = [
+  "Environment :: Console",
+  "Intended Audience :: Information Technology",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Security",
+]
+dependencies = []
+
+[project.scripts]
+candix = "candix.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["candix*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
