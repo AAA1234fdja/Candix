@@ -18,6 +18,9 @@ CAPABILITIES: tuple[tuple[str, str, str], ...] = (
     ("policy", "candix.agent.policy", "intent risk, autonomy and approval decisions"),
     ("guard", "candix.agent.guard", "scope guard, deny lists, red lines, untrusted framing"),
     ("budget", "candix.agent.budget", "task, intent, tool-call and token budgets"),
+    ("budget-ledger", "candix.agent.budget_ledger", "hierarchical task→intent budgets a la par Go engine"),
+    ("egress", "candix.agent.egress", "noise-profile governor: token bucket, jitter, coalescing, cache"),
+    ("constraints", "candix.agent.constraints", "operation constraints block (allow/deny) from engine"),
     ("adaptive", "candix.agent.adaptive", "hypotheses, anomaly scores and bandit choice"),
     ("priors", "candix.agent.learning", "cross-run priors that survive the process"),
     ("targeting", "candix.agent.targeting", "ranked next targets for the planner"),
@@ -113,6 +116,16 @@ class Harness:
         self.router = notify.from_config(dict(self.settings.notify), gate=self.command_gate) if self.settings.notify else None
         self.board = review.ReviewBoard(path=str(self.artifacts / "review.json") if self.artifacts else "")
         self.todos = todolist.TodoList(str(self.artifacts / "todos.json") if (self.artifacts and self.settings.todos) else "")
+        try:
+            from candix.agent.budget_ledger import BudgetLedger
+            self.budget_ledger = BudgetLedger.from_env()
+        except Exception:
+            self.budget_ledger = None
+        try:
+            from candix.agent.egress import current_governor
+            self.egress_governor = current_governor()
+        except Exception:
+            self.egress_governor = None
         self.blocked: list[dict[str, Any]] = []
         self.tool_checks = 0
         self.deliveries: list[dict[str, Any]] = []
@@ -349,6 +362,18 @@ class Harness:
                     engine_info["discrepancies"] = [e.get("discrepancy") for e in self.dual_events if e.get("discrepancy")]
         except Exception:
             pass
+        budget_info: dict[str, Any] = {}
+        try:
+            if getattr(self, "budget_ledger", None) is not None:
+                budget_info = self.budget_ledger.state().to_dict()
+        except Exception:
+            pass
+        egress_info: dict[str, Any] = {}
+        try:
+            if getattr(self, "egress_governor", None) is not None:
+                egress_info = {"profile": self.egress_governor.p.__dict__, "snapshot": [h.__dict__ for h in self.egress_governor.snapshot()]}
+        except Exception:
+            pass
         base: dict[str, Any] = {
             "enabled": self.settings.gate,
             "max_risk": self.settings.max_risk,
@@ -360,6 +385,10 @@ class Harness:
             "entries": self.command_gate.summary()["entries"],
             "blocked_details": list(self.blocked[-20:]),
         }
+        if budget_info:
+            base["budget_ledger"] = budget_info
+        if egress_info:
+            base["egress"] = egress_info
         if engine_info:
             base["engine"] = engine_info
         if self.dual_events:
