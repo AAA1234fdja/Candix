@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -18,6 +17,13 @@ from candix.engine_adapter.traffic import TrafficAdapter
 from candix.engine_adapter.agent_gateway import AgentGateway
 from candix.engine_adapter.evidence import EvidenceAdapter
 from candix.engine_adapter.llmpool import LlmPoolAdapter
+from candix.engine_adapter.enrich import EnrichEngine
+from candix.engine_adapter.notify_ext import NotifyDispatcher
+from candix.engine_adapter.report import ReportEngine
+from candix.engine_adapter.mcp_bridge import McpRegistry
+from candix.engine_adapter.sidequestion import SideQuestionService
+from candix.engine_adapter.llmrec import LlmRecorder
+from candix.engine_adapter.extension import ExtensionBridge
 
 
 @dataclass
@@ -28,21 +34,23 @@ class EngineHealth:
     guard: dict[str, Any] = field(default_factory=dict)
     egress: dict[str, Any] = field(default_factory=dict)
     traffic: dict[str, Any] = field(default_factory=dict)
+    enrich: dict[str, Any] = field(default_factory=dict)
+    notify: dict[str, Any] = field(default_factory=dict)
+    report: dict[str, Any] = field(default_factory=dict)
+    mcp: dict[str, Any] = field(default_factory=dict)
+    sidequestion: dict[str, Any] = field(default_factory=dict)
+    llmrec: dict[str, Any] = field(default_factory=dict)
+    extension: dict[str, Any] = field(default_factory=dict)
 
 
 class Engine:
-    """Conexión total engine Go ↔ Python.
-
-    Cada subsistema está conectado: si Go está vivo, Python y Go corren a la par;
-    si no, Python sigue solo (fail-safe). Ningún subsistema queda desconectado.
-    """
+    """Conexión total engine Go ↔ Python — 0 subsistemas desconectados."""
 
     def __init__(self, bridge_config: BridgeConfig | None = None, config_adapter: ConfigAdapter | None = None):
         self.bridge_config = bridge_config or BridgeConfig.from_env()
         self.config = config_adapter or ConfigAdapter()
         self._client = EngineClient(self.bridge_config)
 
-        # Subsistemas — todos inicializados sin falta
         self.db = DbClient(DbConfig(dsn=self.config.pg_dsn()))
         self.server = ServerClient(self.bridge_config.url)
         self.guard = GuardAdapter(self.bridge_config)
@@ -53,6 +61,14 @@ class Engine:
         self.agent = AgentGateway(self.bridge_config)
         self.evidence = EvidenceAdapter()
         self.llmpool = LlmPoolAdapter(self.bridge_config.url)
+        # nuevos conectados sin falta
+        self.enrich = EnrichEngine()
+        self.notify = NotifyDispatcher()
+        self.report = ReportEngine()
+        self.mcp = McpRegistry()
+        self.sidequestion = SideQuestionService()
+        self.llmrec = LlmRecorder(model="candix", profile_name="default")
+        self.extension = ExtensionBridge()
 
     @classmethod
     def from_env(cls) -> Engine:
@@ -62,7 +78,6 @@ class Engine:
     def from_config(cls, cfg: Any) -> Engine:
         return cls(BridgeConfig.from_config(cfg), ConfigAdapter())
 
-    # --- health ---
     def health(self) -> EngineHealth:
         bridge_h = {"enabled": self.bridge_config.enabled, "has_go": self.bridge_config.has_go_toolchain(), "url": self.bridge_config.url}
         try:
@@ -70,34 +85,28 @@ class Engine:
         except Exception as e:
             bridge_h["bridge_error"] = str(e)
         server_h = self.server.health().data if self.server.health().ok else {"ok": False, "error": self.server.health().error}
-        db_h = self.db.health()
-        guard_h = self.guard.snapshot()
-        egress_h = self.egress.snapshot()
-        traffic_h = self.traffic.snapshot()
-        return EngineHealth(bridge=bridge_h, server=server_h, db=db_h, guard=guard_h, egress=egress_h, traffic=traffic_h)
+        return EngineHealth(
+            bridge=bridge_h, server=server_h, db=self.db.health(), guard=self.guard.snapshot(),
+            egress=self.egress.snapshot(), traffic=self.traffic.snapshot(),
+            enrich={"results": len(self.enrich.results())}, notify={"channels": len(self.notify.channels)},
+            report={"ok": True}, mcp={"servers": len(self.mcp._clients)},
+            sidequestion={"provider": bool(self.sidequestion.provider)}, llmrec={"records": len(self.llmrec.records)},
+            extension=self.extension.snapshot(),
+        )
 
     def is_available(self) -> bool:
         return self.server.is_available() or self.bridge_config.enabled
 
-    # --- intercept passthrough ---
     def score_risk(self, tool: str, input_data: dict[str, Any]) -> dict[str, Any]:
         return self.intercept.score_risk(tool, input_data)
-
     def normalize_target(self, raw: str):
         return self.intercept.normalize_target(raw)
-
     def argv_prefix(self, command: str) -> list[str]:
         return self.intercept.argv_prefix(command)
-
-    # --- guard ---
     def guard_check(self, tool: str, input_data: dict[str, Any]) -> dict[str, Any]:
         return self.guard.check(tool, input_data)
-
-    # --- budget ---
     def budget_line(self, **kw: Any) -> str:
         return self.agent.budget_line(**kw)
-
-    # --- convenience ---
     def to_dict(self) -> dict[str, Any]:
         h = self.health()
-        return {"bridge": h.bridge, "server": h.server, "db": h.db, "egress": h.egress, "traffic": h.traffic, "llm_profiles": [p.__dict__ for p in self.llmpool.list_profiles()]}
+        return {"bridge": h.bridge, "server": h.server, "db": h.db, "egress": h.egress, "traffic": h.traffic, "enrich": h.enrich, "notify": h.notify, "report": h.report, "mcp": h.mcp, "llm_profiles": [p.__dict__ for p in self.llmpool.list_profiles()]}
