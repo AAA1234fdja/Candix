@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import socket
 import sys
@@ -688,6 +689,413 @@ def cmd_api(args: Any) -> int:
     return EXIT_OK
 
 
+def _agent_client(args: Any) -> Any:
+    """Build a model client from flags + environment, or return None."""
+
+    from candix.llm.client import LLMClient, RetryPolicy
+    from candix.llm.providers import AnthropicProvider, OllamaProvider, OpenAICompatibleProvider
+
+    if getattr(args, "no_llm", False):
+        return None
+    kind = str(getattr(args, "provider", "") or os.environ.get("CANDIX_LLM_PROVIDER", "")).strip().lower()
+    model = str(getattr(args, "model", "") or os.environ.get("CANDIX_LLM_MODEL", "")).strip()
+    api_key = os.environ.get("CANDIX_LLM_API_KEY", "")
+    base_url = os.environ.get("CANDIX_LLM_BASE_URL", "")
+    if not kind:
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            kind = "anthropic"
+        elif os.environ.get("OPENAI_API_KEY") or base_url:
+            kind = "openai"
+        else:
+            return None
+    try:
+        if kind == "anthropic":
+            provider = AnthropicProvider(
+                model=model or "claude-sonnet-4-5",
+                base_url=base_url or "https://api.anthropic.com",
+                api_key=api_key or os.environ.get("ANTHROPIC_API_KEY", ""),
+            )
+        elif kind == "ollama":
+            provider = OllamaProvider(model=model or "llama3.1", base_url=base_url or "http://127.0.0.1:11434")
+        else:
+            provider = OpenAICompatibleProvider(
+                model=model or "gpt-4.1-mini",
+                base_url=base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+                api_key=api_key or os.environ.get("OPENAI_API_KEY", ""),
+            )
+    except Exception as error:
+        echo(out.paint(f"  model provider unavailable: {error}", "yellow"))
+        return None
+    return LLMClient([provider], retry=RetryPolicy(attempts=2))
+
+
+def _notify_config(args: Any) -> dict[str, Any]:
+    """Turn the notify flags into the dict the harness router expects."""
+
+    config: dict[str, Any] = {}
+    if getattr(args, "notify_file", ""):
+        config["file"] = args.notify_file
+    if getattr(args, "notify_webhook", ""):
+        config["webhook"] = args.notify_webhook
+    if getattr(args, "notify_slack", ""):
+        config["slack"] = args.notify_slack
+    commands = [str(item) for item in (getattr(args, "notify_command", []) or []) if str(item).strip()]
+    if commands:
+        config["command"] = shlex.split(commands[0])
+        config["allowed_prefixes"] = list(getattr(args, "allow_command", []) or [])
+    if config:
+        config.setdefault("console", False)
+    return config
+
+
+def cmd_agent(args: Any) -> int:
+    from candix.agent import AgentSession, AgentSettings, AutonomyLevel, BudgetLimits
+    from candix.agent.reporting import render_json, render_markdown, summary_line
+
+    if getattr(args, "list_playbooks", False):
+        from candix.agent.playbooks import default_registry
+
+        registry = default_registry()
+        if args.json_output:
+            out.print_json({"playbooks": registry.catalogue()})
+            return EXIT_OK
+        echo(out.rule("playbooks"))
+        echo(out.table(
+            ["NAME", "STEPS", "WHAT IT DOES"],
+            [(item.name, str(len(item.steps)), item.description[:60]) for item in registry.playbooks.values()],
+        ))
+        echo("")
+        return EXIT_OK
+
+    if not args.targets:
+        echo(out.paint("  agent needs at least one target", "red"))
+        return EXIT_USAGE
+
+    config = load_config(args)
+    if args.exploit:
+        config.set("exploit.enabled", True)
+    engagement = load_engagement(args, list(args.targets), allow_exploit=bool(args.exploit))
+    run_id = time.strftime("%Y%m%d-%H%M%S")
+    artifacts = Path(args.artifacts) if args.artifacts else Path(args.out) / run_id
+    artifacts.mkdir(parents=True, exist_ok=True)
+    journal_path = args.journal or str(artifacts / "journal.jsonl")
+    settings = AgentSettings(
+        goal=args.goal,
+        autonomy=AutonomyLevel.parse(args.autonomy),
+        exploit=bool(args.exploit),
+        limits=BudgetLimits(
+            turns=int(args.turns),
+            intents=int(args.intents),
+            tool_calls=int(args.tool_calls),
+            tokens=int(args.tokens),
+            seconds=float(args.seconds),
+            cost_usd=float(args.cost),
+        ),
+        artifacts_dir=str(artifacts),
+        journal_path=journal_path,
+        memory_path=args.memory,
+        skills_dir=args.skills,
+        max_turns=int(args.turns),
+        use_llm=not args.no_llm,
+        approve_mode=args.approvals,
+        verify=True,
+        dry_run=bool(args.dry_run),
+        playbook=str(getattr(args, "playbook", "") or ""),
+        playbook_limit=int(getattr(args, "playbook_limit", 0) or 0),
+        adaptive=bool(getattr(args, "adaptive", False)),
+        adaptive_strategy=str(getattr(args, "adaptive_strategy", "ucb") or "ucb"),
+        explore_ratio=float(getattr(args, "explore_ratio", 0.3) or 0.3),
+        priors_path=str(getattr(args, "priors", "") or ""),
+        use_priors=not bool(getattr(args, "no_priors", False)),
+        gate=not bool(getattr(args, "no_gate", False)),
+        gate_max_risk=int(getattr(args, "gate_max_risk", 70) or 70),
+        allow_commands=tuple(getattr(args, "allow_command", []) or ()),
+        allow_private=bool(getattr(args, "allow_private", False)),
+        notify_config=_notify_config(args),
+        notify_min_severity=str(getattr(args, "notify_min_severity", "high") or "high"),
+        poc=not bool(getattr(args, "no_poc", False)),
+        review=not bool(getattr(args, "no_review", False)),
+        todos=not bool(getattr(args, "no_todos", False)),
+        targeting=not bool(getattr(args, "no_targeting", False)),
+    )
+    client = _agent_client(args)
+
+    def on_event(kind: str, payload: dict[str, Any]) -> None:
+        if args.json_output or args.quiet:
+            return
+        if kind == "plan":
+            echo(out.paint(f"  plan  {payload.get('reasoning', '')[:100]}", "cyan"))
+        elif kind == "intent.start":
+            echo(f"    → {payload.get('title', '')[:70]} [{payload.get('tool', '')}]")
+        elif kind == "intent.finish":
+            mark = "ok" if payload.get("ok") else "fail"
+            echo(out.paint(f"    {mark} {payload.get('summary', '')[:100]}", "grey"))
+        elif kind == "intent.blocked":
+            echo(out.paint(f"    blocked: {payload.get('title', '')} — {payload.get('reason', '')[:90]}", "yellow"))
+        elif kind == "intent.awaiting_approval":
+            echo(out.paint(f"    approval needed: {payload.get('title', '')} (risk {payload.get('risk')})", "yellow"))
+        elif kind == "finding":
+            echo(out.paint(f"    ! {payload.get('severity', '')} {payload.get('title', '')}", "red"))
+
+    session = AgentSession.create(
+        list(args.targets),
+        config=config,
+        engagement=engagement,
+        settings=settings,
+        client=client,
+        skills_dir=args.skills,
+        on_event=on_event,
+    )
+
+    if args.resume:
+        from candix.agent.state_io import SessionState, restore
+
+        try:
+            restored = restore(session, SessionState.load(args.resume))
+            echo(out.paint(f"  resumed: {restored}", "grey"))
+        except Exception as error:
+            echo(out.paint(f"  cannot resume: {error}", "red"))
+            return EXIT_ERROR
+
+    if args.dry_run:
+        return _agent_dry_run(session, settings, args, out)
+
+    echo(out.rule("agent"))
+    echo(out.kv_table(
+        [
+            ("targets", ", ".join(args.targets)),
+            ("goal", settings.goal[:80]),
+            ("autonomy", settings.autonomy.value),
+            ("planner", ", ".join(filter(None, ["llm" if client is not None else "heuristic", settings.playbook, "adaptive" if settings.adaptive else ""]))),
+            ("budget", f"{args.turns} turns · {args.tool_calls} tool calls · {args.seconds:.0f}s"),
+            ("artifacts", str(artifacts)),
+        ],
+        indent=2,
+    ))
+    echo("")
+    try:
+        result = session.run()
+    except KeyboardInterrupt:
+        echo(out.paint("  interrupted", "yellow"))
+        return 130
+    except CandixError as error:
+        echo(out.paint(f"  error: {error}", "red"))
+        return EXIT_ERROR
+
+    snapshot = session.snapshot(result)
+    formats = [item.strip().lower() for item in str(args.formats or "").split(",") if item.strip()]
+    written: dict[str, str] = {}
+    from candix.agent.report_bridge import render as render_format
+    from candix.report.builder import RENDERERS, normalize_format
+
+    for fmt in formats:
+        name = normalize_format(fmt)
+        if name not in RENDERERS:
+            if name == "markdown":
+                path = artifacts / f"agent-{run_id}.md"
+                path.write_text(render_markdown(result, snapshot=snapshot), encoding="utf-8")
+                written["markdown"] = str(path)
+            elif name == "json":
+                path = artifacts / f"agent-{run_id}.json"
+                path.write_text(render_json(result, snapshot=snapshot), encoding="utf-8")
+                written["json"] = str(path)
+            continue
+        try:
+            body = render_format(result, name, snapshot)
+        except Exception as error:
+            echo(out.paint(f"  {name}: renderer failed ({error})", "yellow"))
+            continue
+        path = artifacts / f"agent-{run_id}.{RENDERERS[name].extension}"
+        path.write_text(body, encoding="utf-8")
+        written[name] = str(path)
+    session.save(artifacts / "session.json", result)
+    try:
+        from candix.agent.audit import markdown as audit_markdown
+        from candix.agent.compliance import ComplianceReport, ControlStatus, Control
+        from candix.agent.insights import export_markdown as insights_markdown
+        from candix.agent.insights import collect
+        from candix.agent.scorecard import Scorecard, CategoryScore
+
+        insight_report = collect(result, session.telemetry, budget=session.budget)
+        (artifacts / "insights.md").write_text(insights_markdown(insight_report), encoding="utf-8")
+        written["insights"] = str(artifacts / "insights.md")
+        adaptive = getattr(session, "_adaptive", None)
+        if adaptive is not None:
+            (artifacts / "adaptive.md").write_text(adaptive.markdown(), encoding="utf-8")
+            written["adaptive"] = str(artifacts / "adaptive.md")
+    except Exception as error:
+        echo(out.paint(f"  insights unavailable: {error}", "yellow"))
+    try:
+        from candix.agent.evidence_chain import build_chain
+
+        chain = build_chain(result, session.assets)
+        chain_path = artifacts / "evidence-chain.json"
+        chain.save(chain_path)
+        written["evidence"] = str(chain_path)
+    except Exception as error:
+        echo(out.paint(f"  evidence chain unavailable: {error}", "yellow"))
+    if getattr(args, "metrics", ""):
+        try:
+            from candix.agent.metrics_export import from_result as metrics_from_result
+
+            metrics = metrics_from_result(result, telemetry=session.telemetry, budget=session.budget, extra_labels={"run": run_id})
+            written["metrics"] = metrics.save(args.metrics)
+        except Exception as error:
+            echo(out.paint(f"  metrics unavailable: {error}", "yellow"))
+    for kind, path in ((snapshot.get("harness", {}) or {}).get("artifacts") or {}).items():
+        written[f"harness/{kind}"] = str(path)
+    if result.proofs:
+        try:
+            from candix.agent.replay_kit import (checkout_script, from_result, index, write as write_replay)
+
+            bundles = from_result(result)
+            if bundles:
+                replay_dir = artifacts / "replay"
+                write_replay(bundles, replay_dir)
+                (replay_dir / "README.md").write_text(index(bundles), encoding="utf-8")
+                script = replay_dir / "run-all.sh"
+                script.write_text(checkout_script(bundles, str(replay_dir)), encoding="utf-8")
+                script.chmod(0o755)
+                written["replay"] = str(replay_dir)
+        except Exception as error:
+            echo(out.paint(f"  replay kit unavailable: {error}", "yellow"))
+
+    counts = result.counts()
+    if args.json_output:
+        payload = {
+            "stop_reason": result.stop_reason,
+            "counts": counts,
+            "findings": len(result.findings),
+            "proofs": len(result.proofs),
+            "triage": snapshot.get("triage", {}),
+            "duration": round(result.duration, 2),
+            "budget": snapshot["budget"],
+            "journal": snapshot["journal"],
+            "artifacts": {**written, "session": str(artifacts / "session.json")},
+            "lessons": result.lessons,
+            "harness": snapshot.get("harness", {}),
+        }
+        out.print_json(payload)
+        return EXIT_FINDINGS if result.findings else EXIT_OK
+
+    echo("")
+    echo(out.rule("run summary"))
+    echo(summary_line(result))
+    echo(out.kv_table(
+        [
+            ("stop reason", result.stop_reason[:90]),
+            ("intents", ", ".join(f"{name}={count}" for name, count in sorted(counts.items())) or "none"),
+            ("findings", str(len(result.findings))),
+            ("proofs", str(len(result.proofs))),
+            ("triage", str(snapshot.get("triage", {}).get("summary", ""))[:70] or "n/a"),
+            ("scorecard", str(snapshot.get("scorecard", {}).get("summary", ""))[:70] or "n/a"),
+            ("asvs", str(snapshot.get("compliance", {}).get("summary", ""))[:70] or "n/a"),
+            ("gate", f"{snapshot.get('harness', {}).get('gate', {}).get('blocked', 0)} blocked"),
+            ("review", str(snapshot.get("harness", {}).get("review", {}).get("total", 0)) + " under review"),
+            ("todos", str((snapshot.get("harness", {}) or {}).get("todos", "") or "none")[:60]),
+            ("approvals", str(snapshot["approvals"]["pending"]) + " pending"),
+            ("journal", str(snapshot["journal"].get("entries", 0)) + " entries"),
+        ],
+        indent=2,
+    ))
+    if result.findings:
+        echo("")
+        from candix.agent.report_bridge import finding_rows
+
+        ordered = {str(item.get("id", "")): item for item in result.findings}
+        prioritized = []
+        seen: set[str] = set()
+        for ranked in snapshot.get("triage", {}).get("ranked", []):
+            key = str(ranked.get("id", ""))
+            item = ordered.get(key)
+            if item is not None and key not in seen:
+                prioritized.append(item)
+                seen.add(key)
+        for key, item in ordered.items():
+            if key not in seen:
+                prioritized.append(item)
+                seen.add(key)
+        rows = [
+            (str(item.get("severity", "")), str(item.get("title", ""))[:60], str(item.get("url", ""))[:50])
+            for item in prioritized[:15]
+        ]
+        echo(out.table(["SEVERITY", "FINDING", "ENDPOINT"], rows))
+    blocked_calls = (snapshot.get("harness", {}) or {}).get("gate", {}).get("entries", [])
+    blocked_calls = [entry for entry in blocked_calls if not entry.get("allowed")]
+    if blocked_calls:
+        echo("")
+        echo(out.paint("  refused by the gate:", "yellow"))
+        for entry in blocked_calls[:5]:
+            echo(f"    · {entry.get('subject', '')[:70]} — {entry.get('reason', '')[:80]}")
+    if result.lessons:
+        echo("")
+        echo(out.paint("  lessons for the next run:", "grey"))
+        for lesson in result.lessons[:5]:
+            echo(f"    · {lesson.get('text', '')[:110]}")
+    if written:
+        echo("")
+        echo(out.kv_table([(key, value) for key, value in written.items()], indent=2))
+    echo("")
+    return EXIT_FINDINGS if result.findings else EXIT_OK
+
+
+def _agent_dry_run(session: Any, settings: Any, args: Any, out: Any) -> int:
+    """Plan one turn and show what would run, executing nothing."""
+
+    from candix.agent.planner import PlannerState
+
+    planner = session.build_planner()
+    extras = session.harness.plan_extras(session.assets, [])
+    state = PlannerState(
+        goal=settings.goal,
+        targets=session.targets,
+        coverage=session.assets.coverage(),
+        remaining_turns=settings.max_turns,
+        exploit_enabled=settings.exploit,
+        next_targets=extras.get("next_targets", []),
+        todos=extras.get("todos", ""),
+    )
+    decision = planner.decide(state)
+    from candix.agent.simulator import simulate
+
+    simulation = simulate(decision.intents, policy=session.policy, registry=session.registry, budget=session.budget)
+    payload = {
+        "action": decision.action,
+        "reasoning": decision.reasoning,
+        "source": decision.source,
+        "intents": [],
+    }
+    if args.json_output:
+        estimates = {item.intent: item.to_dict() for item in simulation.estimates}
+        for intent in decision.intents:
+            gate = session.policy.gate(intent)
+            payload["intents"].append(
+                {**intent.to_dict(), "gate": gate.to_dict(), "estimate": estimates.get(intent.title, {})}
+            )
+        payload["simulation"] = simulation.to_dict()
+        out.print_json(payload)
+        return EXIT_OK
+    echo(out.rule("dry run"))
+    echo(f"planner: {decision.source} · action: {decision.action}")
+    echo(f"reason: {decision.reasoning}")
+    echo("")
+    rows = []
+    for intent in decision.intents:
+        gate = session.policy.gate(intent)
+        allowed = "yes" if gate.allowed else "no"
+        approval = "approve" if gate.requires_approval else "-"
+        rows.append((intent.phase.value, intent.title[:50], intent.tool, allowed, approval, f"{gate.risk:.2f}"))
+    if rows:
+        echo(out.table(["PHASE", "INTENT", "TOOL", "ALLOWED", "GATE", "RISK"], rows))
+    else:
+        echo("no intents planned")
+    echo("")
+    echo(f"simulation: {simulation.summary()}")
+    for note in simulation.notes:
+        echo(out.paint(f"  note: {note}", "yellow"))
+    return EXIT_OK
+
+
 def cmd_notify(args: Any) -> int:
     from candix.integrations.base import Notification, build, load_plugins
     from candix.integrations.siem import render as render_siem
@@ -720,6 +1128,153 @@ def cmd_notify(args: Any) -> int:
     if args.json_output:
         out.print_json({"results": results})
     return EXIT_OK if all(item.get("ok", True) for item in results) else EXIT_ERROR
+
+
+def cmd_gate(args: Any) -> int:
+    """Answer one question: would this command run, and why?"""
+
+    from candix.agent.intercept import CommandGate, level_of, score_command
+
+    command = " ".join(str(item) for item in args.argv).strip()
+    gate = CommandGate(
+        allowed_prefixes=tuple(args.allow_prefix),
+        max_risk=int(args.max_risk),
+        targets=tuple(args.target),
+    )
+    decision = gate.check(command, targets=args.target)
+    risk = score_command(command)
+    if args.json_output:
+        out.print_json(
+            {
+                "command": command,
+                "allowed": decision.allowed,
+                "rule": decision.rule,
+                "reason": decision.reason,
+                "prefix": decision.prefix,
+                "risk": risk.to_dict(),
+                "level": level_of(risk.score),
+            }
+        )
+        return EXIT_OK if decision.allowed else EXIT_FINDINGS
+    echo(out.rule("gate"))
+    echo(out.kv_table(
+        [
+            ("command", command[:100]),
+            ("prefix", decision.prefix or "n/a"),
+            ("risk", f"{risk.score}/100 ({level_of(risk.score)})"),
+            ("decision", "allow" if decision.allowed else "block"),
+            ("rule", decision.rule or "-"),
+            ("reason", decision.reason[:110]),
+        ],
+        indent=2,
+    ))
+    for reason in risk.reasons[:5]:
+        echo(out.paint(f"  · {reason}", "grey"))
+    return EXIT_OK if decision.allowed else EXIT_FINDINGS
+
+
+def cmd_harness(args: Any) -> int:
+    """Show what a run actually gets, and check targets against the gate."""
+
+    from candix.agent.harness import HarnessSettings, status
+    from candix.agent.intercept import TargetGate
+
+    rows = status()
+    report: dict[str, Any] = {"capabilities": rows}
+    if args.run:
+        session_path = Path(args.run)
+        if session_path.is_dir():
+            session_path = session_path / "session.json"
+        try:
+            payload = json.loads(session_path.read_text(encoding="utf-8"))
+            report["run"] = payload.get("harness", {})
+        except (OSError, ValueError) as error:
+            echo(out.paint(f"  cannot read {session_path}: {error}", "red"))
+            return EXIT_ERROR
+    if args.target:
+        gate = TargetGate(allow=tuple(args.target))
+        report["targets"] = [
+            {"target": item, **gate.check(item).to_dict()} for item in args.target
+        ]
+    report["settings"] = HarnessSettings().to_dict()
+    if args.json_output:
+        out.print_json(report)
+        return EXIT_OK
+    echo(out.rule("harness"))
+    echo(out.table(
+        ["CAPABILITY", "MODULE", "STATE"],
+        [(row["capability"], row["module"], row["state"]) for row in rows],
+    ))
+    echo("")
+    echo(out.paint("  defaults: gate on, poc/review/todos/targeting on, notify off", "grey"))
+    for item in report.get("targets", []):
+        mark = "allow" if item["allowed"] else "block"
+        echo(f"  {mark:5} {item['target']} — {item['reason'][:80]}")
+    if "run" in report:
+        harness_block = report["run"] or {}
+        echo(out.kv_table(
+            [
+                ("run gate", str(harness_block.get("gate", {}).get("blocked", "n/a")) + " blocked"),
+                ("poc", str(harness_block.get("poc", "n/a"))),
+                ("review", _review_line(harness_block.get("review"))),
+                ("todos", str(harness_block.get("todos", "n/a"))[:70]),
+                ("notify", str(harness_block.get("notify", {}).get("summary", "n/a"))[:70]),
+            ],
+            indent=2,
+        ))
+    echo("")
+    return EXIT_OK
+
+
+def _review_line(block: Any) -> str:
+    if not isinstance(block, dict):
+        return "n/a"
+    counts = block.get("counts") or {}
+    return f"{block.get('total', 0)} finding(s), {counts.get('pending', 0)} pending"
+
+
+def cmd_review(args: Any) -> int:
+    """Read, print and (optionally) approve a run's reviewer board."""
+
+    from candix.agent.review import ReviewBoard, block_release
+
+    source = Path(args.path)
+    if source.is_dir():
+        source = source / "review.json"
+    if not source.is_file():
+        echo(out.paint(f"  no review board at {source}", "red"))
+        return EXIT_ERROR
+    board = ReviewBoard.load(source)
+    approved = 0
+    if args.approve:
+        approved = board.approve_all(args.reviewer)
+        board.save(source)
+    summary = board.summary()
+    ready, reason = block_release(board)
+    if args.json_output:
+        out.print_json({"summary": summary, "approved_now": approved, "release": {"ready": ready, "reason": reason}})
+        return EXIT_OK if approved or not args.approve else EXIT_FINDINGS
+    if args.markdown:
+        echo(board.markdown())
+        return EXIT_OK
+    echo(out.rule("review"))
+    echo(out.kv_table(
+        [
+            ("board", str(source)),
+            ("findings", str(summary["total"])),
+            ("approved", str(summary["counts"].get("approved", 0))),
+            ("pending", str(len(board.pending()))),
+            ("rejected", str(len(board.blocked()))),
+            ("release", "ready" if ready else reason[:70]),
+        ],
+        indent=2,
+    ))
+    if args.approve:
+        echo(out.paint(f"  approved {approved} finding(s) as {args.reviewer}", "grey"))
+    for item in board.pending()[:10]:
+        echo(f"  · {item.title[:70]} — {item.progress:.0%} of the checklist")
+    echo("")
+    return EXIT_OK
 
 
 def cmd_playbooks(args: Any) -> int:
@@ -855,6 +1410,52 @@ def cmd_version(args: Any) -> int:
     return EXIT_OK
 
 
+def cmd_bundle(args: Any) -> int:
+    from candix.agent.reports_bundle import build, prune, verify
+
+    if args.verify:
+        ok, problems = verify(args.path)
+        if args.json_output:
+            out.print_json({"ok": ok, "problems": problems, "path": args.path})
+        else:
+            echo(out.rule("bundle verify"))
+            echo(out.kv_table([("path", args.path), ("ok", str(ok))], indent=2))
+            for problem in problems:
+                echo(out.paint(f"  {problem}", "red"))
+        return EXIT_OK if ok else EXIT_ERROR
+
+    bundle = build(args.path, destination=args.zip or None)
+    removed = prune(args.path) if args.prune else []
+    if args.json_output:
+        out.print_json({"files": len(bundle.entries), "bytes": bundle.size, "zip": args.zip, "pruned": removed})
+    else:
+        echo(out.rule("bundle"))
+        echo(out.kv_table([("files", str(len(bundle.entries))), ("bytes", str(bundle.size)), ("zip", args.zip or "-")], indent=2))
+        for name in removed:
+            echo(out.paint(f"  pruned {name}", "grey"))
+    return EXIT_OK
+
+
+def cmd_agent_diff(args: Any) -> int:
+    from candix.agent.diffing import from_files, regression_gate, summary_table
+
+    diff = from_files(args.before, args.after)
+    ok, reason = regression_gate(diff, fail_on=args.fail_on, allow_new=args.allow_new)
+    if args.json_output:
+        out.print_json({"counts": diff.counts(), "gate": {"ok": ok, "reason": reason}, "summary": diff.summary()})
+    else:
+        echo(out.rule("agent diff"))
+        echo(diff.summary())
+        echo("")
+        echo(diff.markdown())
+        if args.out:
+            Path(args.out).write_text(diff.markdown(), encoding="utf-8")
+            echo(out.kv_table([("written", args.out)], indent=2))
+    if not ok:
+        echo(out.paint(f"  gate: {reason}", "red"))
+    return EXIT_OK if ok else EXIT_FINDINGS
+
+
 COMMANDS = {
     "scan": cmd_scan,
     "exploit": cmd_exploit,
@@ -872,6 +1473,12 @@ COMMANDS = {
     "export": cmd_export,
     "api": cmd_api,
     "notify": cmd_notify,
+    "agent": cmd_agent,
+    "gate": cmd_gate,
+    "harness": cmd_harness,
+    "review": cmd_review,
     "playbooks": cmd_playbooks,
+    "bundle": cmd_bundle,
+    "agent-diff": cmd_agent_diff,
     "version": cmd_version,
 }

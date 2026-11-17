@@ -118,8 +118,19 @@ def directory_wordlist(include_extensions: bool = False, extensions: tuple[str, 
     return list(dict.fromkeys(entries))
 
 
-def file_wordlist() -> list[str]:
-    return list(dict.fromkeys(FILES))
+DOTFILES: tuple[str, ...] = (
+    ".env", ".env.local", ".env.production", ".env.development", ".env.backup", ".env.old",
+    ".env.example", ".git/config", ".git/HEAD", ".gitignore", ".svn/entries", ".hg/requires",
+    ".DS_Store", ".htaccess", ".htpasswd", ".dockerignore", ".npmrc", ".aws/credentials",
+    ".well-known/security.txt", "sitemap.xml", "robots.txt",
+)
+
+
+def file_wordlist(*, include_dotfiles: bool = True) -> list[str]:
+    entries = list(FILES)
+    if include_dotfiles:
+        entries.extend(entry for entry in DOTFILES if entry not in entries)
+    return list(dict.fromkeys(entries))
 
 
 def parameter_wordlist() -> list[str]:

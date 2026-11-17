@@ -24,6 +24,9 @@ candix = "candix.cli.main:main"
 
 [tool.setuptools.packages.find]
 include = ["candix*"]
+# engine/ and docs/ hold the archived AGPL-3.0 engine, which is never packaged:
+# see docs/engine.md
+exclude = ["engine*", "docs*", "skills*", "tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
