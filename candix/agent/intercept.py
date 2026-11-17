@@ -5,10 +5,11 @@ input always produces the same answer with the same reasons. The rules mirror th
 Go gate in ``engine/intercept/`` and ``engine/guard/``; this module is an
 independent Python implementation for this codebase.
 
-When ``candix.engine_bridge`` is enabled (``engine.enabled=true`` or
-``CANDIX_ENGINE_URL``), risk scoring can be delegated to the Go engine via
-``EngineClient``/``InterceptProxy`` with a Python fallback — the two
-implementations are kept in sync by ``engine/cmd/bridge`` tests.
+Cuando ``candix.engine_bridge`` está habilitado (``engine.enabled=true`` o
+``CANDIX_ENGINE_URL``), Python y Go corren **a la par** vía
+``EngineClient``/``InterceptProxy``: ambos motores puntúan concurrentemente y
+se reconcilian fail-safe (max score, razones unidas). El fallback Python-only
+sigue funcionando sin Go.
 """
 
 from __future__ import annotations
@@ -156,10 +157,12 @@ INTENT_TOOL_MAP = {
 
 def score_tool(tool: str, arguments: dict[str, Any] | None = None) -> RiskReport:
     payload = arguments or {}
-    if tool in {"command", "shell"}:
-        return score_command(str(payload.get("command", "")))
-    if tool in {"write", "edit"}:
-        return score_file_write(str(payload.get("path", payload.get("file_path", ""))))
+    # Mantener paridad con Go ScoreRisk: Bash/shell_open/Monitor/shell_send → shellSignals
+    if tool in {"command", "shell", "Bash", "bash", "shell_open", "Monitor", "shell_send"}:
+        cmd = str(payload.get("command", payload.get("text", "")))
+        return score_command(cmd)
+    if tool in {"write", "edit", "Write", "Edit", "MultiEdit", "NotebookEdit"}:
+        return score_file_write(str(payload.get("path", payload.get("file_path", payload.get("notebook_path", "")))))
     if tool in {"http.request", "http.batch", "http.replay", "web.probe", "WebFetch", "web_search"}:
         return score_web(str(payload.get("method", "GET")))
     if tool == "exploit.run":
@@ -579,37 +582,50 @@ def explain(command: str) -> str:
     return "\n".join(lines)
 
 # ---------------------------------------------------------------------------
-# Go engine bridge (optional delegation)
+# Go engine bridge — interconectado a la par (no delega)
 # ---------------------------------------------------------------------------
 
 def score_via_engine(tool: str, arguments: dict[str, Any] | None = None) -> tuple[bool, Any]:
-    """Try to score via Go engine bridge, falling back to Python.
+    """Puntúa **en paralelo** Python + Go y reconcilia fail-safe.
 
-    Returns (used_go: bool, report: RiskReport|BridgeResult).
-    When the bridge is disabled or unavailable, returns (False, python_report).
+    - Si el bridge está habilitado: ambos motores corren concurrentes,
+      ``score=max(py, go)``, razones unidas, discrepancias auditadas.
+    - Si no: solo Python.
+
+    Returns (used_parallel: bool, BridgeResult|RiskReport).
+    ``used_parallel`` es True cuando Go participó (source == \"parallel\").
     """
     try:
         from candix.engine_bridge.config import BridgeConfig
         from candix.engine_bridge.client import EngineClient
 
-        cfg = BridgeConfig()
-        # Allow env override
-        import os
-        if os.environ.get("CANDIX_ENGINE_URL"):
-            cfg.url = os.environ["CANDIX_ENGINE_URL"]
-            cfg.enabled = True
-        if os.environ.get("CANDIX_ENGINE_ENABLED", "").lower() in {"1","true","yes","on"}:
-            cfg.enabled = True
-        if not cfg.enabled and not cfg.use_subprocess:
-            raise RuntimeError("bridge disabled")
+        cfg = BridgeConfig.from_env()
         client = EngineClient(cfg)
-        # Use Go subprocess path (no HTTP needed)
         result = client.score_risk(tool, arguments or {})
+        # parallel => ambos motores participaron
+        if result.ok and result.source in {"parallel", "parallel-python-only"}:
+            return True, result
         if result.ok and result.source.startswith("go"):
-            # Adapt Go report to Python RiskReport shape
             return True, result
     except Exception:
         pass
-    # fallback
+    # python-only (bridge deshabilitado o Go no disponible)
     return False, score_tool(tool, arguments)
+
+
+def score_dual(tool: str, arguments: dict[str, Any] | None = None) -> Any:
+    """Atajo que siempre retorna un BridgeResult reconciliado (a la par)."""
+    from candix.engine_bridge.config import BridgeConfig
+    from candix.engine_bridge.client import EngineClient
+
+    cfg = BridgeConfig.from_env()
+    # forzar enabled para que intente Go si existe toolchain
+    if not cfg.enabled:
+        # intenta igual si hay toolchain — refleja \"a la par cuando existe\"
+        import shutil
+
+        if shutil.which("go"):
+            cfg.enabled = True
+    client = EngineClient(cfg)
+    return client.score_risk(tool, arguments or {})
 

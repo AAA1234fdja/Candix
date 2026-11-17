@@ -1,7 +1,8 @@
-"""HTTP + subprocess client for the Go engine."""
+"""HTTP + subprocess client for the Go engine — now **parallel**."""
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import subprocess
 import urllib.error
@@ -17,7 +18,7 @@ from candix.engine_bridge.config import BridgeConfig
 class BridgeResult:
     ok: bool
     data: dict[str, Any]
-    source: str  # "go-http" | "go-subprocess" | "python-fallback" | "error"
+    source: str  # "go-http" | "go-subprocess" | "python-fallback" | "parallel" | "parallel-python-only" | "error"
     error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -25,7 +26,7 @@ class BridgeResult:
 
 
 class EngineClient:
-    """Talk to the Go engine via HTTP or via the ``bridge`` CLI."""
+    """Talk to the Go engine via HTTP or via the ``bridge`` CLI — **a la par** con Python."""
 
     def __init__(self, config: BridgeConfig | None = None) -> None:
         self.config = config or BridgeConfig()
@@ -100,48 +101,112 @@ class EngineClient:
         except Exception as exc:
             return BridgeResult(ok=False, data={}, source="error", error=str(exc))
 
-    # ---------------------------------------------------------------- high-level
-    def score_risk(self, tool: str, tool_input: dict[str, Any]) -> BridgeResult:
-        """Score risk, preferring Go and falling back to Python."""
-        # Try HTTP health first if enabled
-        if self.config.enabled:
-            # For now HTTP does not expose ScoreRisk directly, so use subprocess path
-            # but we still check health to report source
-            h = self.health()
-            if h.ok:
-                # If server is up we could add a dedicated endpoint later;
-                # for now delegate to subprocess which is always correct
-                pass
-        # Try Go subprocess
-        if self.config.use_subprocess:
-            go_result = self.score_risk_go(tool, tool_input)
-            if go_result.ok:
-                return go_result
-        # Fallback to Python re-implementation
-        try:
-            from candix.agent import intercept as py_intercept
+    # ---------------------------------------------------------------- high-level — PARALLEL
+    def _python_score(self, tool: str, tool_input: dict[str, Any]) -> Any:
+        from candix.agent import intercept as py_intercept
 
-            report = py_intercept.score_tool(tool, tool_input)
+        return py_intercept.score_tool(tool, tool_input)
+
+    def _python_normalize(self, raw: str) -> Any | None:
+        from candix.agent import intercept as py_intercept
+
+        return py_intercept.normalise_target(raw)  # type: ignore
+
+    def score_risk(self, tool: str, tool_input: dict[str, Any]) -> BridgeResult:
+        """Score risk **en paralelo** Python + Go, reconciliado fail-safe.
+
+        - Si ``enabled=False``: solo Python (CI/air-gapped)
+        - Si ``enabled=True`` y ``parallel=True``: ambos motores corren concurrentes,
+          ``score=max(py, go)``, razones unidas, discrepancias reportadas
+        - Si ``enabled=True`` y ``parallel=False``: legado Go-preferente con fallback
+        """
+        # Python report always available synchronously (fast)
+        try:
+            py_report = self._python_score(tool, tool_input)
+        except Exception as exc:
+            return BridgeResult(ok=False, data={}, source="error", error=str(exc))
+
+        # Python-only path — shape uniforme para que proxy no tenga python=None
+        if not self.config.enabled:
             return BridgeResult(
                 ok=True,
-                data={"score": report.score, "level": report.level, "reasons": report.reasons},
+                data={
+                    "score": py_report.score,
+                    "level": py_report.level,
+                    "reasons": py_report.reasons,
+                    "python": {"score": py_report.score, "level": py_report.level, "reasons": py_report.reasons},
+                    "go": None,
+                    "go_error": "disabled",
+                    "discrepancy": None,
+                    "consensus": "python-only",
+                },
                 source="python-fallback",
             )
-        except Exception as exc:
-            return BridgeResult(ok=False, data={}, source="error", error=str(exc))
+
+        # Parallel path: run Go concurrently, Python already done
+        if self.config.parallel:
+            # Use thread to not block; Go via subprocess is IO-bound
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(self.score_risk_go, tool, tool_input)
+                try:
+                    go_result = fut.result(timeout=self.config.timeout + 1.5)
+                except concurrent.futures.TimeoutError:
+                    go_result = BridgeResult(ok=False, data={}, source="error", error="go timeout")
+                except Exception as exc:
+                    go_result = BridgeResult(ok=False, data={}, source="error", error=str(exc))
+            # reconcile
+            from candix.engine_bridge.reconcile import merge_risk
+
+            return merge_risk(py_report, go_result)
+
+        # Legacy Go-preferente (parallel=False)
+        go_result = self.score_risk_go(tool, tool_input)
+        if go_result.ok:
+            return go_result
+        # fallback to Python (legado)
+        return BridgeResult(
+            ok=True,
+            data={
+                "score": py_report.score,
+                "level": py_report.level,
+                "reasons": py_report.reasons,
+                "python": {"score": py_report.score, "level": py_report.level, "reasons": py_report.reasons},
+                "go": None,
+                "go_error": go_result.error if 'go_result' in locals() else "unavailable",
+                "consensus": "python-fallback",
+            },
+            source="python-fallback",
+        )
 
     def normalize_target(self, raw: str) -> BridgeResult:
-        if self.config.use_subprocess:
-            go_result = self.normalize_target_go(raw)
-            if go_result.ok:
-                return go_result
-        # Python fallback
+        """Normalise target **en paralelo** Python + Go."""
+        py_target = None
         try:
-            from candix.agent import intercept as py_intercept
+            py_target = self._python_normalize(raw)
+        except Exception:
+            py_target = None
 
-            target = py_intercept.normalise_target(raw)  # type: ignore
-            if target is None:
+        if not self.config.enabled:
+            if py_target is None:
                 return BridgeResult(ok=False, data={}, source="python-fallback", error="unparseable")
-            return BridgeResult(ok=True, data=target.to_dict(), source="python-fallback")
-        except Exception as exc:
-            return BridgeResult(ok=False, data={}, source="error", error=str(exc))
+            d = py_target.to_dict()
+            return BridgeResult(ok=True, data={**d, "python": d, "go": None, "consensus": "python-only"}, source="python-fallback")
+
+        if self.config.parallel:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(self.normalize_target_go, raw)
+                try:
+                    go_result = fut.result(timeout=self.config.timeout + 1.5)
+                except Exception as exc:
+                    go_result = BridgeResult(ok=False, data={}, source="error", error=str(exc))
+            from candix.engine_bridge.reconcile import merge_targets
+
+            return merge_targets(py_target, go_result)
+
+        # legacy
+        go_result = self.normalize_target_go(raw)
+        if go_result.ok:
+            return go_result
+        if py_target is None:
+            return BridgeResult(ok=False, data={}, source="python-fallback", error="unparseable")
+        return BridgeResult(ok=True, data=py_target.to_dict(), source="python-fallback")
