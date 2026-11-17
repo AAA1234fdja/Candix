@@ -1,15 +1,19 @@
 # ARTEX reference material
 
-Candix keeps a small, unmodified copy of the ARTEX sources it learned from, in
-[`vendor/artex-reference/`](../vendor/artex-reference/NOTICE.md). Nothing there
-is imported, packaged or executed — `pyproject.toml` excludes `vendor*`, and a
-test fails if any `candix` module imports it.
+Candix keeps a verbatim mirror of the ARTEX sources it learned from, in
+[`vendor/artex-reference/`](../vendor/artex-reference/NOTICE.md): **838 of 855
+tracked files (98.01%)**, 8.88 MB. The rule is mechanical — every source and
+documentation file is copied, only images and fonts are left out — and
+`MANIFEST.json` records each file with its size and SHA-256. Nothing there is
+imported, packaged or executed; `pyproject.toml` excludes `vendor*`, and a test
+fails if any `candix` module imports it.
 
 ## What was copied
 
-16 files from `BaaRai/ARTEX@6337341` (fork of `Autumn-27/ARTEX`), chosen by one
-rule: **the code that decides what the agent may do first, then the loop that
-makes those decisions observable.**
+The whole tree from `BaaRai/ARTEX@6337341` (fork of `Autumn-27/ARTEX`), because a
+mirror answers questions a curated excerpt cannot. Reading order, though, is
+still the risk-first one below: **the code that decides what the agent may do,
+then the loop that makes those decisions observable.**
 
 | Layer | Files | Why it is the risky part |
 | --- | --- | --- |
@@ -18,9 +22,11 @@ makes those decisions observable.**
 | Agent core | `agent/budget.go`, `agent/noise_profile.go`, `agent/untrusted_prompt.go`, `agent/data_envelope.go`, `agent/planner.go`, `agent/worker.go`, `agent/toolcatalog.go` | Budgets, prompt-injection framing and the planner/worker split are the parts that are hard to get right and easy to get subtly wrong. |
 | Evidence | `evidence/store.go` | A finding without an integrity-checked record is an opinion. |
 
-Deliberately **not** copied: the tool adapters (`agent/tools.go`, 108 KB), the
-HTTP proxy, the DB migrations, the web UI and the integrations. Those are
-reproducible volume; they are not where a mistake becomes a breach.
+The mirror also contains the volume — tool adapters (`agent/tools.go`, 108 KB),
+the HTTP proxy, DB migrations, the React UI, the integrations — which is useful
+for comparing behaviour, not for borrowing design decisions. Only 17 binary
+assets are absent (15 PNGs, 1 SVG, 1 CSS sprite set), listed in
+`MANIFEST.json → skipped`.
 
 ## What Candix implemented instead
 
@@ -55,7 +61,9 @@ notification command cannot silently become a remote shell.
 
 ## Licensing
 
-ARTEX is AGPL-3.0; Candix is MIT. The reference copy is source material for
-study and must not ship inside a distributed Candix artifact under MIT terms.
+ARTEX is AGPL-3.0; Candix is MIT. The mirror is source material for study and
+must not ship inside a distributed Candix artifact under MIT terms. With 98% of
+the upstream tree present, this is no longer a couple of reference files: treat
+`vendor/artex-reference/` as an AGPL component of the repository.
 See [`vendor/artex-reference/NOTICE.md`](../vendor/artex-reference/NOTICE.md)
 for the full statement and the three options if distribution is planned.
