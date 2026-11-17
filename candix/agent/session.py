@@ -61,6 +61,11 @@ class AgentSettings:
     dry_run: bool = False
     playbook: str = ""
     playbook_limit: int = 0
+    adaptive: bool = False
+    adaptive_strategy: str = "ucb"
+    explore_ratio: float = 0.3
+    priors_path: str = ""
+    use_priors: bool = True
 
     def loop_config(self) -> LoopConfig:
         return LoopConfig(max_intents_per_turn=self.max_intents_per_turn, max_turns=self.max_turns, verify_before_finish=self.verify)
@@ -73,6 +78,8 @@ class AgentSettings:
             "approve_mode": self.approve_mode,
             "use_llm": self.use_llm,
             "max_turns": self.max_turns,
+            "adaptive": self.adaptive,
+            "adaptive_strategy": self.adaptive_strategy,
             "success_criteria": list(self.success_criteria),
             "limits": self.limits.to_dict(),
         }
@@ -189,13 +196,45 @@ class AgentSession:
     def build_planner(self) -> Any:
         if getattr(self, "planner_factory", None) is not None:
             return self.planner_factory(self)
-        planner = self._with_playbook(HeuristicPlanner())
-        if not self.settings.use_llm or self.client is None:
-            self.tool_context.state["planner_source"] = "playbook" if self.settings.playbook else "heuristic"
-            return planner
-        schemas = {tool.name: tool.parameters for tool in self.registry.tools.values()}
-        self.tool_context.state["planner_source"] = "playbook" if self.settings.playbook else "llm"
-        return self._with_playbook(LLMPlanner(self.client, tool_names=self.registry.names(), schemas=schemas, fallback=HeuristicPlanner()))
+        base: Any = HeuristicPlanner()
+        source = "heuristic"
+        if self.settings.use_llm and self.client is not None:
+            schemas = {tool.name: tool.parameters for tool in self.registry.tools.values()}
+            base = LLMPlanner(self.client, tool_names=self.registry.names(), schemas=schemas, fallback=HeuristicPlanner())
+            source = "llm"
+        if self.settings.adaptive:
+            base = self._with_adaptive(base)
+            source = f"adaptive/{source}"
+        if self.settings.playbook:
+            source = f"playbook+{source}"
+        self.tool_context.state["planner_source"] = source
+        return self._with_playbook(base)
+
+    def _with_adaptive(self, planner: Any) -> Any:
+        from candix.agent.adaptive import AdaptiveConfig, AdaptiveController, AdaptivePlanner
+        from candix.agent.learning import Learner
+
+        existing = getattr(self, "_adaptive", None)
+        if existing is not None:
+            existing.fallback = planner
+            return existing
+        if getattr(self, "learner", None) is None:
+            self.learner = Learner(
+                path=self.settings.priors_path or None,
+                targets=self.targets,
+                enabled=bool(self.settings.use_priors),
+            )
+        controller = AdaptiveController(
+            AdaptiveConfig(explore_ratio=float(self.settings.explore_ratio), strategy=self.settings.adaptive_strategy),
+        )
+        try:
+            self.learner.seed_bandit(controller.bandit)
+        except Exception:
+            self.telemetry.increment("adaptive.prior_seed_failed")
+        adaptive = AdaptivePlanner(planner, controller=controller)
+        self._adaptive = adaptive
+        self.tool_context.state["adaptive"] = controller
+        return adaptive
 
     def _with_playbook(self, planner: Any) -> Any:
         if not self.settings.playbook:
@@ -213,6 +252,26 @@ class AgentSession:
             values=values_for(self.targets, goal=self.settings.goal),
             limit=self.settings.playbook_limit,
         )
+
+    def _learn_from_run(self, result: TaskResult) -> None:
+        learner = getattr(self, "learner", None)
+        if learner is None or not getattr(learner, "enabled", False):
+            return
+        try:
+            from candix.agent.insights import collect
+
+            report = collect(result, self.telemetry, budget=self.budget)
+            stats = [
+                {"tool": stat.tool, "calls": stat.calls, "findings": stat.findings, "errors": stat.errors}
+                for stat in getattr(report, "tools", [])
+            ]
+            outcomes = learner.outcomes(stats)
+            if outcomes:
+                learner.record_run(outcomes)
+                learner.decay()
+                learner.save()
+        except Exception:
+            self.telemetry.increment("adaptive.learn_failed")
 
     def _legacy_build_planner(self) -> Any:
         fallback = HeuristicPlanner()
@@ -271,6 +330,7 @@ class AgentSession:
         started = time.time()
         result = loop.run()
         result.finished_at = time.time()
+        self._learn_from_run(result)
         try:
             lessons = reflect(result, telemetry=self.telemetry, memory=self.memory, journal=self.journal)
             result.lessons = lessons
@@ -335,6 +395,14 @@ class AgentSession:
             "scope_directives": self._scope_directives(),
             "engagement": dict(self.tool_context.state.get("engagement_summary") or {}),
         }
+        adaptive = getattr(self, "_adaptive", None)
+        if adaptive is not None:
+            try:
+                payload["adaptive"] = adaptive.report()
+                payload["priors"] = self.learner.to_dict() if getattr(self, "learner", None) is not None else {}
+            except Exception:
+                payload["adaptive"] = {}
+                payload["priors"] = {}
         if result is not None:
             payload["triage"] = triage(findings, assets=self.assets).to_dict()
             try:

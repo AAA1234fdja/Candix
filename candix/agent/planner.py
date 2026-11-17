@@ -30,6 +30,8 @@ class PlannerState:
     facts: int = 0
     provable_facts: int = 0
     proofs: int = 0
+    endpoints: list[dict[str, Any]] = field(default_factory=list)
+    turn: int = 0
 
     def to_prompt(self) -> str:
         payload = {
@@ -45,6 +47,8 @@ class PlannerState:
             "facts_recorded": self.facts,
             "provable_facts": self.provable_facts,
             "proofs": self.proofs,
+            "endpoints_known": len(self.endpoints),
+            "turn": self.turn,
             "blackboard": self.blackboard[-3000:],
         }
         return json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)

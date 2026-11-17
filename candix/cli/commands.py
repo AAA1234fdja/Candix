@@ -782,6 +782,11 @@ def cmd_agent(args: Any) -> int:
         dry_run=bool(args.dry_run),
         playbook=str(getattr(args, "playbook", "") or ""),
         playbook_limit=int(getattr(args, "playbook_limit", 0) or 0),
+        adaptive=bool(getattr(args, "adaptive", False)),
+        adaptive_strategy=str(getattr(args, "adaptive_strategy", "ucb") or "ucb"),
+        explore_ratio=float(getattr(args, "explore_ratio", 0.3) or 0.3),
+        priors_path=str(getattr(args, "priors", "") or ""),
+        use_priors=not bool(getattr(args, "no_priors", False)),
     )
     client = _agent_client(args)
 
@@ -831,7 +836,7 @@ def cmd_agent(args: Any) -> int:
             ("targets", ", ".join(args.targets)),
             ("goal", settings.goal[:80]),
             ("autonomy", settings.autonomy.value),
-            ("planner", ", ".join(filter(None, ["llm" if client is not None else "heuristic", settings.playbook]))),
+            ("planner", ", ".join(filter(None, ["llm" if client is not None else "heuristic", settings.playbook, "adaptive" if settings.adaptive else ""]))),
             ("budget", f"{args.turns} turns · {args.tool_calls} tool calls · {args.seconds:.0f}s"),
             ("artifacts", str(artifacts)),
         ],
@@ -884,6 +889,10 @@ def cmd_agent(args: Any) -> int:
         insight_report = collect(result, session.telemetry, budget=session.budget)
         (artifacts / "insights.md").write_text(insights_markdown(insight_report), encoding="utf-8")
         written["insights"] = str(artifacts / "insights.md")
+        adaptive = getattr(session, "_adaptive", None)
+        if adaptive is not None:
+            (artifacts / "adaptive.md").write_text(adaptive.markdown(), encoding="utf-8")
+            written["adaptive"] = str(artifacts / "adaptive.md")
     except Exception as error:
         echo(out.paint(f"  insights unavailable: {error}", "yellow"))
     try:

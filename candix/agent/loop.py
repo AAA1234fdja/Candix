@@ -214,7 +214,50 @@ class AgentLoop:
             facts=len(self.blackboard.facts),
             provable_facts=len(self.blackboard.facts.provable()),
             proofs=len(self.context.state.get("proofs") or []),
+            endpoints=self._endpoint_rows(),
+            turn=self.budget.turns,
         )
+
+    def _endpoint_rows(self, *, limit: int = 80) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for node in self.assets.of_kind("endpoint")[:limit]:
+            attributes = node.attributes or {}
+            rows.append(
+                {
+                    "url": attributes.get("url", node.label),
+                    "method": attributes.get("method", "GET"),
+                    "status": attributes.get("status", 0),
+                    "source": attributes.get("source", ""),
+                }
+            )
+        return rows
+
+    def _ingest(self, observations: Any) -> None:
+        hook = getattr(self.planner, "ingest", None)
+        if hook is None:
+            return
+        try:
+            hook(observations)
+        except Exception:
+            self.telemetry.increment("adaptive.ingest_failed")
+
+    def _reject_planner(self, intent: Intent, reason: str) -> None:
+        hook = getattr(self.planner, "reject", None)
+        if hook is None:
+            return
+        try:
+            hook(intent, reason)
+        except Exception:
+            self.telemetry.increment("adaptive.reject_failed")
+
+    def _reward_planner(self, intent: Intent, *, ok: bool, findings: int, novelty: int) -> None:
+        hook = getattr(self.planner, "observe", None)
+        if hook is None:
+            return
+        try:
+            hook(intent, ok=ok, findings=findings, novelty=novelty)
+        except Exception:
+            self.telemetry.increment("adaptive.reward_failed")
 
     def _findings(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -253,6 +296,7 @@ class AgentLoop:
             self.exploration.add_intent(intent)
             if not decision.allowed:
                 intent.mark(IntentStatus.BLOCKED, result=decision.reason)
+                self._reject_planner(intent, decision.reason)
                 self.journal.append("intent.blocked", {"intent": intent.id, "reason": decision.reason, "rule": decision.rule})
                 self._emit("intent.blocked", {"title": intent.title, "reason": decision.reason})
                 continue
@@ -262,6 +306,7 @@ class AgentLoop:
                     approved.append(intent)
                 else:
                     asked += 1
+                    self._reject_planner(intent, f"awaiting approval: {request.reason}")
                     intent.mark(IntentStatus.AWAITING_APPROVAL, result=request.reason)
                     self._emit("intent.awaiting_approval", {"title": intent.title, "id": request.id, "risk": decision.risk})
                     self.journal.append("intent.awaiting_approval", {"intent": intent.id, "request": request.id})
@@ -304,9 +349,18 @@ class AgentLoop:
                 "observation",
                 {"intent": intent.id, "tool": observation.tool, "digest": observation.digest, "summary": observation.summary[:300]},
             )
+        findings_before = len(result.findings)
+        endpoints_before = len(self.assets.of_kind("endpoint"))
         if worker_result.ok and "verify" in intent.tags:
             self._mark_verified(str(intent.arguments.get("url", "")), result)
+        self._ingest(worker_result.observations)
         self._absorb(worker_result, result)
+        self._reward_planner(
+            intent,
+            ok=bool(worker_result.ok),
+            findings=max(0, len(result.findings) - findings_before),
+            novelty=max(0, len(self.assets.of_kind("endpoint")) - endpoints_before),
+        )
         self.journal.append(
             "intent.finish",
             {

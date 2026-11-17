@@ -70,6 +70,14 @@ board.seed(findings)
 ok, reason = block_release(board)
 ```
 
+## Adaptive runs
+
+Use `--adaptive` when the target is worth the extra turns: it re-tests what the
+target's own responses flag instead of walking the catalogue. Check
+`adaptive.md` afterwards — the arm table says which technique paid off, and the
+hypothesis table says what is still open. If a run keeps landing in `explore`
+with no findings, narrow the goal or drop `--explore-ratio`.
+
 ## CI integration
 
 Use the diff gate so a scheduled run fails only on regressions:
@@ -91,6 +99,10 @@ Keep the agent's own audit in the pipeline too: `session.json` contains
 | `--approvals ask` | stops before any high-risk intent |
 | `--no-llm` | deterministic planner, zero model cost |
 | `--playbook-limit` | stop seeding after N playbook steps |
+| `--adaptive` | choose tests by evidence value instead of a fixed order |
+| `--adaptive-strategy thompson` | sharper exploration when arms are close |
+| `--explore-ratio` | share of turns reserved for exploration |
+| `--priors` / `--no-priors` | where cross-run priors live, or disable them |
 
 ## Common problems
 

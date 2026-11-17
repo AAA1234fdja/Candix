@@ -47,8 +47,10 @@ class AutonomyLevel(str, Enum):
         }[self]
 
 
+# The exploit phase is gated on its own; these hints only add risk to intents that
+# name a technique beyond the phase itself.
 _ACTIVE_HINTS = re.compile(
-    r"inject|exploit|brute|fuzz|upload|smuggl|poison|race|payload|attack|auth-?bypass|takeover",
+    r"inject|brute|fuzz|upload|smuggl|poison|race|payload|auth-?bypass|takeover",
     re.IGNORECASE,
 )
 _DESTRUCTIVE_HINTS = re.compile(r"delete|destroy|wipe|reset|drop|overwrite", re.IGNORECASE)
@@ -77,7 +79,9 @@ class RiskPolicy:
             risk = 0.45
         haystack = f"{intent.title} {intent.description} {intent.tool}"
         if _ACTIVE_HINTS.search(haystack):
-            risk += 0.15
+            # An exploit-phase intent is already scored high and gated on --exploit;
+            # keyword inflation there would push ordinary exploitation past the ceiling.
+            risk += 0.05 if intent.phase is Phase.EXPLOIT else 0.15
         if _DESTRUCTIVE_HINTS.search(f"{haystack} {intent.arguments}"):
             risk = max(risk, 0.95)
         if str(intent.arguments.get("method", "")).upper() in {"PUT", "PATCH", "DELETE"}:

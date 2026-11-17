@@ -15,7 +15,7 @@ a hunch:
 ```bash
 candix agent https://app.example.com \
   --authorized alice --exploit --autonomy auto --profile lab \
-  --goal "prove the most severe issue" --formats markdown,json,sarif
+  --adaptive --goal "prove the most severe issue" --formats markdown,json,sarif
 ```
 
 It crawls, fingerprints, probes for exposed files, ingests OpenAPI documents,
@@ -27,13 +27,16 @@ facts with provenance, and calls `goal.prove` before finishing.
 * deterministic planner offline, schema-checked LLM planner with a heuristic fallback
 * scope, red-line, risk and approval gates that cannot be widened by the model
 * asset graph with coverage, facts with provenance, hash-chained evidence
+* adaptive mode: per-endpoint baselines, Bayesian hypotheses, UCB/Thompson bandit,
+  cross-run priors scoped to the target
 * playbooks, resume from saved state, run diffs, Prometheus metrics, self-audit
 * SARIF, HTML, JUnit and Markdown reports from the same run
 
 Documentation: [`docs/agent.md`](docs/agent.md),
 [`docs/agent-safety.md`](docs/agent-safety.md),
 [`docs/agent-runbook.md`](docs/agent-runbook.md),
-[`docs/llm.md`](docs/llm.md). Skills live in [`skills/`](skills).
+[`docs/llm.md`](docs/llm.md),
+[`docs/agent-adaptive.md`](docs/agent-adaptive.md). Skills live in [`skills/`](skills).
 
 ## Safety model
 

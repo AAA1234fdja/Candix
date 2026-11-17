@@ -55,6 +55,10 @@ goal ──► planner ──► intents ──► policy gate ──► worker 
 | Notify | `agent.notify` | Slack, Discord, webhook, file and command channels with dedupe |
 | PoC | `agent.poc` | curl/Python/Node/http-file proofs with credentials as env vars |
 | Bundle | `agent.reports_bundle` | hashed, verifiable delivery package of a run |
+| Anomaly | `agent.anomaly` | per-endpoint baselines and deviations worth a test |
+| Hypotheses | `agent.hypotheses` | beliefs with priors, posteriors and information value |
+| Adaptive | `agent.adaptive` | bandit, mode selection and the adaptive planner |
+| Learning | `agent.learning` | cross-run priors scoped to a target fingerprint |
 | Tri-age | `agent.triage` | de-duplication, ranking, chains, risk and grade |
 | Evidence | `agent.evidence_chain` | hash-chained records anchored to assets and facts |
 
@@ -172,6 +176,23 @@ agent-runs/20261117-101500/
   journal.jsonl                 append-only event log
   approvals.json                pending approvals
 ```
+
+## Adaptive mode
+
+The deterministic planner walks a fixed order; the adaptive planner chooses each
+turn from evidence. It baselines every endpoint, turns deviations into beliefs
+with posteriors, and spends turns on the tests with the highest information value
+while a bandit tracks which technique pays off against this target:
+
+```bash
+candix agent https://app.example.com --engagement acme.json --adaptive --exploit
+```
+
+Modes: `verify` (unverified findings first), `test` (best belief), `exploit`
+(supported beliefs), `explore` (highest-uncertainty arms when stalled). Refused
+intents are remembered, so the run does not re-ask the same approval gate.
+Cross-run priors live in `~/.candix/agent-priors.json`, scoped per target
+fingerprint. Details: [`docs/agent-adaptive.md`](agent-adaptive.md).
 
 ## Playbooks
 
