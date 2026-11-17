@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from candix.agent.models import Decision, Intent, IntentStatus, Phase
@@ -190,3 +192,29 @@ def test_llm_planner_rejects_unknown_tools():
     decision = planner.decide(state)
     assert decision.action == "plan"
     assert all(intent.tool in {"recon.crawl", "recon.fingerprint"} for intent in decision.intents)
+
+
+def test_findings_receive_stable_ids_and_snapshot_records_delivery(lab, tmp_path):
+    from candix.agent.models import Decision, Intent, Phase
+
+    session = make_session(lab, turns=4)
+    probe = Intent("Probe known paths", phase=Phase.RECON, tool="web.probe", arguments={"url": lab.base_url})
+    session.planner_factory = lambda _session: ScriptedPlanner(
+        [Decision("plan", "probe first", [probe], 1.0, "script")]
+    )
+    result = session.run()
+    assert result.findings
+    ids_ = [str(item.get("id", "")) for item in result.findings]
+    assert all(ids_)
+    assert len(ids_) == len(set(ids_))
+
+    snapshot = session.snapshot(result)
+    assert snapshot["triage"]["ranked"]
+    assert all(entry["id"] for entry in snapshot["triage"]["ranked"])
+    assert "insights" in snapshot and "audit" in snapshot and "techniques" in snapshot
+    assert snapshot["audit"]["checks"]
+
+    path = session.save(tmp_path / "session.json", result)
+    payload = json.loads(open(path).read())
+    assert payload["triage"]["ranked"]
+    assert payload["techniques"]["ratio"] >= 0

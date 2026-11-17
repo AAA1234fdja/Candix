@@ -128,11 +128,17 @@ def arguments_for(tool: str, *, targets: Iterable[str], intents: int = 1) -> dic
     urls = list(targets)
     if tool == "recon.crawl":
         return {"urls": urls, "max_pages": 40, "depth": 2}
-    if tool in {"detect.run", "fuzz.run", "exploit.run"}:
-        return {"urls": urls, "limit": max(1, intents)}
+    if tool == "detect.run":
+        return {"max_findings": max(5, intents * 5)}
+    if tool == "fuzz.run":
+        return {"iterations": max(20, intents * 20), "targets": urls}
+    if tool == "exploit.run":
+        return {"max_attempts": max(1, intents), "min_severity": "high"}
     if tool == "http.batch":
         return {"urls": urls}
-    if tool in {"http.request", "web.probe"}:
+    if tool == "web.probe":
+        return {"url": urls[0] if urls else ""}
+    if tool == "http.request":
         return {"urls": urls}
     if tool == "api.spec":
         return {"urls": urls}

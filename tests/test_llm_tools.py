@@ -33,7 +33,9 @@ def test_router_allow_deny_and_arguments():
     assert ensure_allowed(choice, allowed=["detect.run"]).name == ""
     assert ensure_allowed(choice, allowed=["recon.crawl"], deny=["recon.crawl"]).name == ""
     assert arguments_for("recon.crawl", targets=["http://a"])["max_pages"] == 40
-    assert arguments_for("detect.run", targets=["http://a"], intents=2)["limit"] == 2
+    assert arguments_for("detect.run", targets=["http://a"], intents=2)["max_findings"] == 10
+    assert arguments_for("web.probe", targets=["http://a"])["url"] == "http://a"
+    assert arguments_for("fuzz.run", targets=["http://a"], intents=1)["iterations"] == 20
     assert phase_of_tool("exploit.run") == "exploit"
     assert "| tool | phase |" in describe_router(TOOLS)
 

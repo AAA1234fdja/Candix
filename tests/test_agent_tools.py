@@ -251,3 +251,39 @@ def test_replay_package_reads_nested_exchange():
     bundle = package({"title": "x", "exchange": {"request": {"url": "http://a", "method": "POST", "body": "a=1"}}})
     assert bundle.method == "POST"
     assert "--data-raw 'a=1'" in bundle.curl()
+
+
+def test_playbook_requires_endpoints_before_seeding():
+    from candix.agent.playbooks import default_registry
+    from candix.agent.planner import Decision, HeuristicPlanner, PlannerState
+
+    class Fallback:
+        def decide(self, state):
+            return Decision("plan", "fallback", [], 0.5, "test")
+
+    registry = default_registry()
+    playbook = registry.get("injection-sweep")
+    planner = __import__("candix.agent.playbooks", fromlist=["PlaybookPlanner"]).PlaybookPlanner(playbook, Fallback(), values={"url": "http://a"})
+    empty = PlannerState(goal="g", targets=["http://a"], remaining_turns=3)
+    assert planner.decide(empty).reasoning == "fallback"
+
+    from candix.agent.graph import AssetGraph
+
+    graph = AssetGraph()
+    graph.add_endpoint("GET", "http://a/x?q=1")
+    filled = PlannerState(goal="g", targets=["http://a"], coverage=graph.coverage(), remaining_turns=3)
+    decision = planner.decide(filled)
+    assert decision.source == "playbook"
+    assert [intent.tool for intent in decision.intents][:1] == ["detect.run"]
+
+
+def test_every_builtin_playbook_expands_with_values():
+    from candix.agent.playbooks import default_registry, values_for
+
+    registry = default_registry()
+    values = values_for(["http://a"], goal="assess")
+    for name in registry.names():
+        playbook = registry.get(name)
+        intents = playbook.expand(values)
+        assert intents, name
+        assert all(intent.tool for intent in intents)

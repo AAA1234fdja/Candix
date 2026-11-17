@@ -266,6 +266,7 @@ class AgentSession:
             memory=self.memory,
             config=self.settings.loop_config(),
             on_event=self.on_event,
+            run_id=self.id,
         )
         started = time.time()
         result = loop.run()
@@ -371,8 +372,8 @@ class AgentSession:
             payload["errors"] = [error for error in (result.stop_reason,) if error.startswith("error")]
         return payload
 
-    def save(self, path: str | Path) -> str:
+    def save(self, path: str | Path, result: TaskResult | None = None) -> str:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(self.snapshot(), indent=2, sort_keys=True), encoding="utf-8")
+        target.write_text(json.dumps(self.snapshot(result), indent=2, sort_keys=True), encoding="utf-8")
         return str(target)

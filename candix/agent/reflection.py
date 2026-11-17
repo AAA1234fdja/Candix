@@ -71,9 +71,12 @@ def derive_lessons(result: TaskResult, telemetry: Any = None) -> list[LessonDraf
         severity = str(finding.get("severity", "info"))
         severity_counts[severity] = severity_counts.get(severity, 0) + 1
     if severity_counts.get("critical") or severity_counts.get("high"):
+        hot = sorted(
+            {str(finding.get("category", "") or "exposure") for finding in result.findings if str(finding.get("severity", "")).lower() in {"critical", "high"}}
+        )
         lessons.append(
             LessonDraft(
-                "High-severity findings came from direct parameter injection; those endpoints deserve the first minutes of the next run.",
+                f"High severity came from {', '.join(hot[:3])}; those endpoints deserve the first minutes of the next run.",
                 tags=("prioritisation",),
                 weight=1.2,
             )

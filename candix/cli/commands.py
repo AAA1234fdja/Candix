@@ -873,7 +873,7 @@ def cmd_agent(args: Any) -> int:
         path = artifacts / f"agent-{run_id}.{RENDERERS[name].extension}"
         path.write_text(body, encoding="utf-8")
         written[name] = str(path)
-    session.save(artifacts / "session.json")
+    session.save(artifacts / "session.json", result)
     try:
         from candix.agent.audit import markdown as audit_markdown
         from candix.agent.compliance import ComplianceReport, ControlStatus, Control
@@ -959,13 +959,17 @@ def cmd_agent(args: Any) -> int:
 
         ordered = {str(item.get("id", "")): item for item in result.findings}
         prioritized = []
+        seen: set[str] = set()
         for ranked in snapshot.get("triage", {}).get("ranked", []):
-            item = ordered.get(str(ranked.get("id", "")))
-            if item is not None:
+            key = str(ranked.get("id", ""))
+            item = ordered.get(key)
+            if item is not None and key not in seen:
                 prioritized.append(item)
-        for item in result.findings:
-            if item not in prioritized:
+                seen.add(key)
+        for key, item in ordered.items():
+            if key not in seen:
                 prioritized.append(item)
+                seen.add(key)
         rows = [
             (str(item.get("severity", "")), str(item.get("title", ""))[:60], str(item.get("url", ""))[:50])
             for item in prioritized[:15]

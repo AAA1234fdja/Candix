@@ -70,8 +70,10 @@ class AgentLoop:
         memory: Any = None,
         config: LoopConfig | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        run_id: str = "",
     ) -> None:
         self.goal = goal
+        self.run_id = run_id
         self.planner = planner
         self.worker = worker
         self.context = context
@@ -401,6 +403,9 @@ class AgentLoop:
         key = finding.get("id") or finding.get("title")
         if any(item.get("id") == key for item in result.findings):
             return
+        if not finding.get("id"):
+            finding["id"] = self._next_finding_id()
+        key = finding["id"]
         result.findings.append(finding)
         node = self.assets.add_finding(finding)
         self.exploration.upsert(node.id, node.kind, node.label, **node.attributes)
@@ -410,6 +415,11 @@ class AgentLoop:
             {"id": key, "title": finding.get("title"), "severity": finding.get("severity"), "url": finding.get("url")},
         )
         self._emit("finding", {"title": finding.get("title"), "severity": finding.get("severity")})
+
+    def _next_finding_id(self) -> str:
+        run = str(getattr(self, "run_id", "") or "run").replace(" ", "")[:12]
+        counter = int(self.telemetry.snapshot().get("counters", {}).get("findings.registered", 0)) + 1
+        return f"CDX-F-{run}-{counter:04d}"
 
     def _goal_proven(self, result: TaskResult) -> bool:
         """A goal is closed by an accepted proof, never by enthusiasm.
