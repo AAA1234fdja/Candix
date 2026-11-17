@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/AAA1234fdja/candix/engine/db"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/BaaRai/Norma/llm"
 )
 
 type failingProvider struct{ err error }

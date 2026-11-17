@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/AAA1234fdja/candix/engine/llmpool"
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/BaaRai/Norma/harness"
+	"github.com/BaaRai/Norma/llm"
 )
 
 type fakeProvider struct {

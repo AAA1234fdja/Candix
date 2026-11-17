@@ -14,8 +14,8 @@ import (
 	"github.com/AAA1234fdja/candix/engine/agent"
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/intercept"
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/BaaRai/Norma/harness"
+	"github.com/BaaRai/Norma/llm"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 

@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Autumn-27/norma/agentcore"
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/noaadapter"
+	"github.com/BaaRai/Norma/agentcore"
+	"github.com/BaaRai/Norma/harness"
+	"github.com/BaaRai/Norma/llm"
+	"github.com/BaaRai/Norma/noaadapter"
 )
 
 // A worker whose protected context exceeds a tiny NOA window ends with

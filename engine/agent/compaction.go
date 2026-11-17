@@ -27,8 +27,8 @@ import (
 	"time"
 
 	"github.com/AAA1234fdja/candix/engine/db"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/BaaRai/Norma/llm"
+	"github.com/BaaRai/Norma/transcript"
 )
 
 // Compactor performs background cold-node compaction for many explorations.

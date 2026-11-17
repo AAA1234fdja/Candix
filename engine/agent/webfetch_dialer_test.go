@@ -18,7 +18,7 @@ import (
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/guard"
 	"github.com/AAA1234fdja/candix/engine/intercept"
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 // Step 2.1: the WebFetch tool of every agent kind connects through the pinned

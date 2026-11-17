@@ -10,7 +10,7 @@ import (
 
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/intercept"
-	"github.com/Autumn-27/norma/hook"
+	"github.com/BaaRai/Norma/hook"
 )
 
 // A guard with no interceptor no longer hard-blocks anything: destructive/exfil

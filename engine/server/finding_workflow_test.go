@@ -10,7 +10,7 @@ import (
 
 	"github.com/AAA1234fdja/candix/engine/agent"
 	"github.com/AAA1234fdja/candix/engine/db"
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 func workflowCall(t *testing.T, ctx context.Context, tool actool.CoreTool, input any, wantError bool) string {

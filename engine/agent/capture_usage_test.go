@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/AAA1234fdja/candix/engine/db"
-	"github.com/Autumn-27/norma/agentcore"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/BaaRai/Norma/agentcore"
+	"github.com/BaaRai/Norma/llm"
 )
 
 type captureUsageProvider struct {

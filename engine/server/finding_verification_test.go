@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/AAA1234fdja/candix/engine/db"
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 const verificationBody = "HTTP/1.1 200 OK\nuser   admin:\tx7\nend of dump"

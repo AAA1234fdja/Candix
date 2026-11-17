@@ -28,13 +28,24 @@ data envelopes. It is a **renamed fork**, not a dependency:
 
 ## Build
 
-The image builds from the repository root, because the Docker context has to see
-both trees:
+The engine is archived and not built as part of Candix CI. Its Go module is
+`github.com/AAA1234fdja/candix/engine` (`go 1.23`, dependency `github.com/BaaRai/Norma`
+with matching `go.sum`). To build locally, ensure Go 1.23+ is installed:
 
 ```bash
+# verify module is consistent (requires network for first fetch)
+go -C engine mod tidy
+go -C engine build ./...
+
+# Docker (from repository root, because the context needs both trees):
 docker compose -f engine/docker-compose.yml up -d --build   # engine + postgres
 docker build -f engine/Dockerfile .                         # image only
 ```
+
+> The upstream `ARTEX` (`BaaRai/ARTEX`, fork of `Autumn-27/ARTEX`) used
+> `github.com/Autumn-27/norma` with a local `replace` to `BaaRai/Norma`. The
+> archived `engine/go.mod` has been normalised to require `BaaRai/Norma`
+> directly so that `go.sum` and `go.mod` are internally consistent.
 
 ## Licence
 
@@ -42,7 +53,7 @@ The engine tree is **AGPL-3.0** (`engine/LICENSE`); Candix is MIT. Renaming a fo
 does not change its licence: distributing these files — in any directory, under
 any name — makes the distribution subject to the AGPL. Keep the tree out of
 release artifacts (the packaging exclude enforces it) or relicense the whole
-distribution.
+distribution. Provenance is recorded in `engine/NOTICE.md`.
 
 ## Where Candix mirrors it
 

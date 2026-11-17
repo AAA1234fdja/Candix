@@ -11,8 +11,8 @@ import (
 	"github.com/AAA1234fdja/candix/engine/agent"
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/traffic"
-	"github.com/Autumn-27/norma/skill"
-	actool "github.com/Autumn-27/norma/tool"
+	"github.com/BaaRai/Norma/skill"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 // mcpUntrustedNote is appended to every MCP tool description: a one-line

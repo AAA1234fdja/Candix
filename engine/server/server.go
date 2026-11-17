@@ -29,9 +29,9 @@ import (
 	"github.com/AAA1234fdja/candix/engine/llmrec"
 	"github.com/AAA1234fdja/candix/engine/report"
 	"github.com/AAA1234fdja/candix/engine/traffic"
-	"github.com/Autumn-27/norma/llm"
-	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/BaaRai/Norma/llm"
+	actool "github.com/BaaRai/Norma/tool"
+	"github.com/BaaRai/Norma/transcript"
 )
 
 // BuildVersion is the backend application version, injected from cmd/candix at

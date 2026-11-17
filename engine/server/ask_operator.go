@@ -13,7 +13,7 @@ import (
 	"github.com/AAA1234fdja/candix/engine/agent"
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/intercept"
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 const askOperatorMaxImage = 10 << 20

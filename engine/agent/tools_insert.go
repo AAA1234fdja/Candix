@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/AAA1234fdja/candix/engine/db"
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 // assetInterceptCandidates extracts the domain/IP/URL candidate strings of an

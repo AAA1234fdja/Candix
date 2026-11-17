@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/AAA1234fdja/candix/engine/db"
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 // Platform operation tools (for the built-in Auto agent): create/edit skills,

@@ -7,7 +7,7 @@ import (
 	"iter"
 
 	"github.com/AAA1234fdja/candix/engine/sidequestion"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/BaaRai/Norma/llm"
 )
 
 // noaRequestOverhead covers request framing the input estimate does not count.

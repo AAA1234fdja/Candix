@@ -22,8 +22,8 @@ import (
 	"github.com/AAA1234fdja/candix/engine/agent"
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/intercept"
-	"github.com/Autumn-27/norma/llm"
-	actool "github.com/Autumn-27/norma/tool"
+	"github.com/BaaRai/Norma/llm"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 // Step 1.8: the targets the custom tools render. The hook reads the parameters

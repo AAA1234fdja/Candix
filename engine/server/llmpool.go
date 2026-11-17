@@ -7,7 +7,7 @@ import (
 	"github.com/AAA1234fdja/candix/engine/agent"
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/llmpool"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/BaaRai/Norma/llm"
 )
 
 // Server-side wiring for LLM pooling (failover). Design: docs/llm-polling-design.md:

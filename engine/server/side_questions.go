@@ -19,8 +19,8 @@ import (
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/llmrec"
 	"github.com/AAA1234fdja/candix/engine/sidequestion"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/BaaRai/Norma/llm"
+	"github.com/BaaRai/Norma/transcript"
 )
 
 type sideRun struct {

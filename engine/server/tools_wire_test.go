@@ -7,7 +7,7 @@ import (
 
 	"github.com/AAA1234fdja/candix/engine/agent"
 	"github.com/AAA1234fdja/candix/engine/db"
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 func names(tools []actool.CoreTool) map[string]actool.CoreTool {

@@ -16,7 +16,7 @@ import (
 	"github.com/AAA1234fdja/candix/engine/guard"
 	"github.com/AAA1234fdja/candix/engine/intercept"
 	"github.com/AAA1234fdja/candix/engine/llmrec"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/BaaRai/Norma/llm"
 )
 
 // judgeWorkerLane is the usage-ledger "worker" label for intercept fallback-judge

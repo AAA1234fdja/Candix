@@ -16,8 +16,17 @@ from __future__ import annotations
 import copy
 import json
 import os
-import tomllib
+import sys
 from dataclasses import dataclass, field
+
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:
+    # Fallback for environments where tomllib is stubbed or missing (tests, 3.10 sandbox)
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ModuleNotFoundError:
+        tomllib = None  # type: ignore[assignment]  # handled at load time with a friendly error
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -237,9 +246,17 @@ class Config:
             file = Path(path)
             if not file.exists():
                 raise ConfigError(f"configuration file not found: {file}")
+            if tomllib is None:
+                raise ConfigError(
+                    f"configuration file {file} requires TOML support (Python 3.11+ tomllib or tomli package). "
+                    f"Running on Python {sys.version_info.major}.{sys.version_info.minor}; upgrade to 3.11+ or install tomli."
+                )
             try:
                 payload = tomllib.loads(file.read_text(encoding="utf-8"))
-            except tomllib.TOMLDecodeError as exc:
+            except Exception as exc:  # TOMLDecodeError or AttributeError when tomllib is None
+                # Preserve original message if it's a decode error
+                if tomllib is not None and hasattr(tomllib, "TOMLDecodeError") and isinstance(exc, tomllib.TOMLDecodeError):
+                    raise ConfigError(f"invalid TOML in {file}: {exc}") from exc
                 raise ConfigError(f"invalid TOML in {file}: {exc}") from exc
             config.data = _deep_merge(config.data, payload)
             config.path = str(file)

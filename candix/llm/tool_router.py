@@ -126,8 +126,11 @@ def fallback_chain(text: str, *, tools: Iterable[str], phase: str = "", limit: i
 
 def arguments_for(tool: str, *, targets: Iterable[str], intents: int = 1) -> dict[str, Any]:
     urls = list(targets)
+    first_url = urls[0] if urls else ""
     if tool == "recon.crawl":
-        return {"urls": urls, "max_pages": 40, "depth": 2}
+        return {"url": first_url, "max_pages": 40, "depth": 2}
+    if tool == "recon.fingerprint":
+        return {"url": first_url}
     if tool == "detect.run":
         return {"max_findings": max(5, intents * 5)}
     if tool == "fuzz.run":
@@ -137,19 +140,40 @@ def arguments_for(tool: str, *, targets: Iterable[str], intents: int = 1) -> dic
     if tool == "http.batch":
         return {"urls": urls}
     if tool == "web.probe":
-        return {"url": urls[0] if urls else ""}
+        return {"url": first_url}
     if tool == "http.request":
-        return {"urls": urls}
+        return {"url": first_url}
     if tool == "api.spec":
-        return {"urls": urls}
+        return {"url": first_url}
     if tool == "graphql.query":
-        return {"urls": urls, "introspect": True}
-    if tool in {"auth.flow", "ws.probe", "jwt.inspect"}:
-        return {"urls": urls}
+        # schema uses empty query for introspection; introspect flag is not valid
+        return {"url": first_url, "query": ""}
+    if tool == "auth.flow":
+        return {"url": first_url}
+    if tool == "ws.probe":
+        return {"url": first_url}
+    if tool == "jwt.inspect":
+        return {"url": first_url} if first_url else {}
+    if tool == "oauth.flow":
+        return {"issuer": first_url} if first_url else {}
     if tool == "findings.list":
         return {"limit": 20}
-    if tool in {"notes.write", "facts.add"}:
-        return {"text": "", "claim": ""}
+    if tool == "endpoints.list":
+        return {"limit": 20}
+    if tool == "payloads.search":
+        return {"family": "xss", "limit": 20}
+    if tool == "notes.write":
+        return {"text": "note from reconnaissance", "kind": "note"}
+    if tool == "facts.add":
+        return {"claim": "observed behavior on target", "source": "tool_output", "confidence": "observed"}
+    if tool in {"goal.prove", "prove_goal"}:
+        return {"claim": "goal assessment"}
+    if tool == "finish":
+        return {"summary": "assessment complete"}
+    if tool == "http.replay":
+        return {"index": -1}
+    if tool == "evidence.capture":
+        return {}
     return {}
 
 

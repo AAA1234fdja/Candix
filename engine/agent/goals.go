@@ -7,11 +7,11 @@ import (
 	"strings"
 
 	"github.com/AAA1234fdja/candix/engine/db"
-	"github.com/Autumn-27/norma/agentcore"
-	"github.com/Autumn-27/norma/llm"
-	acperm "github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/BaaRai/Norma/agentcore"
+	"github.com/BaaRai/Norma/llm"
+	acperm "github.com/BaaRai/Norma/permission"
+	actool "github.com/BaaRai/Norma/tool"
+	"github.com/BaaRai/Norma/transcript"
 )
 
 // goalsDefaultTmpl is the built-in EDITABLE body (section [A]) of the goals-decomposer

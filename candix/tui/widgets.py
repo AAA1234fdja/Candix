@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-import curses
+try:
+    import curses  # type: ignore
+
+    HAS_CURSES = True
+except ImportError:
+    curses = None  # type: ignore  # noqa: F401
+    HAS_CURSES = False
+
 from typing import Any, Iterable, Sequence
 
 PAIRS = {
@@ -34,38 +41,42 @@ def init_colors() -> dict[str, int]:
     """Initialise colour pairs; falls back to a monochrome theme when unavailable."""
 
     mapping = dict(PAIRS)
-    if not curses.has_colors():
+    if not HAS_CURSES:
         return {name: 0 for name in mapping}
-    curses.start_color()
+    if not curses.has_colors():  # type: ignore
+        return {name: 0 for name in mapping}
+    curses.start_color()  # type: ignore
     try:
-        curses.use_default_colors()
+        curses.use_default_colors()  # type: ignore
         background = -1
-    except curses.error:
-        background = curses.COLOR_BLACK
+    except Exception:
+        background = curses.COLOR_BLACK  # type: ignore
     definitions = {
-        "title": (curses.COLOR_CYAN, background),
-        "dim": (curses.COLOR_WHITE, background),
-        "ok": (curses.COLOR_GREEN, background),
-        "warn": (curses.COLOR_YELLOW, background),
-        "error": (curses.COLOR_RED, background),
-        "critical": (curses.COLOR_MAGENTA, background),
-        "high": (curses.COLOR_RED, background),
-        "medium": (curses.COLOR_YELLOW, background),
-        "low": (curses.COLOR_CYAN, background),
-        "accent": (curses.COLOR_BLUE, background),
+        "title": (curses.COLOR_CYAN, background),  # type: ignore
+        "dim": (curses.COLOR_WHITE, background),  # type: ignore
+        "ok": (curses.COLOR_GREEN, background),  # type: ignore
+        "warn": (curses.COLOR_YELLOW, background),  # type: ignore
+        "error": (curses.COLOR_RED, background),  # type: ignore
+        "critical": (curses.COLOR_MAGENTA, background),  # type: ignore
+        "high": (curses.COLOR_RED, background),  # type: ignore
+        "medium": (curses.COLOR_YELLOW, background),  # type: ignore
+        "low": (curses.COLOR_CYAN, background),  # type: ignore
+        "accent": (curses.COLOR_BLUE, background),  # type: ignore
     }
     for name, (foreground, bg) in definitions.items():
         try:
-            curses.init_pair(mapping[name], foreground, bg)
-        except curses.error:  # pragma: no cover - terminal limits
+            curses.init_pair(mapping[name], foreground, bg)  # type: ignore
+        except Exception:  # pragma: no cover - terminal limits
             mapping[name] = 0
     return mapping
 
 
 def attr(pair: int, *, bold: bool = False) -> int:
-    value = curses.color_pair(pair) if pair else 0
+    if not HAS_CURSES:
+        return 0
+    value = curses.color_pair(pair) if pair else 0  # type: ignore
     if bold:
-        value |= curses.A_BOLD
+        value |= curses.A_BOLD  # type: ignore
     return value
 
 
@@ -78,7 +89,7 @@ def safe_addstr(window: Any, y: int, x: int, text: str, attrs: int = 0, *, width
         return
     try:
         window.addnstr(y, x, text, max(0, min(limit, columns - x - 1)), attrs)
-    except curses.error:  # pragma: no cover - writing the last cell raises
+    except Exception:  # pragma: no cover - writing the last cell raises
         pass
 
 
@@ -89,16 +100,16 @@ def draw_box(window: Any, y: int, x: int, height: int, width: int, title: str = 
     style = attr(pair)
     try:
         window.attron(style)
-        window.hline(y, x + 1, curses.ACS_HLINE, width - 2)
-        window.hline(y + height - 1, x + 1, curses.ACS_HLINE, width - 2)
-        window.vline(y + 1, x, curses.ACS_VLINE, height - 2)
-        window.vline(y + 1, x + width - 1, curses.ACS_VLINE, height - 2)
-        window.addch(y, x, curses.ACS_ULCORNER)
-        window.addch(y, x + width - 1, curses.ACS_URCORNER)
-        window.addch(y + height - 1, x, curses.ACS_LLCORNER)
-        window.addch(y + height - 1, x + width - 1, curses.ACS_LRCORNER)
+        window.hline(y, x + 1, curses.ACS_HLINE, width - 2)  # type: ignore
+        window.hline(y + height - 1, x + 1, curses.ACS_HLINE, width - 2)  # type: ignore
+        window.vline(y + 1, x, curses.ACS_VLINE, height - 2)  # type: ignore
+        window.vline(y + 1, x + width - 1, curses.ACS_VLINE, height - 2)  # type: ignore
+        window.addch(y, x, curses.ACS_ULCORNER)  # type: ignore
+        window.addch(y, x + width - 1, curses.ACS_URCORNER)  # type: ignore
+        window.addch(y + height - 1, x, curses.ACS_LLCORNER)  # type: ignore
+        window.addch(y + height - 1, x + width - 1, curses.ACS_LRCORNER)  # type: ignore
         window.attroff(style)
-    except curses.error:  # pragma: no cover
+    except Exception:  # pragma: no cover
         pass
     if title:
         label = f" {title[: max(0, width - 6)]} "
@@ -112,7 +123,7 @@ def draw_bar(window: Any, y: int, x: int, width: int, ratio: float, pair: int) -
     try:
         window.addstr(y, x, "█" * filled, style)
         window.addstr(y, x + filled, "░" * max(0, width - filled), attr(0))
-    except curses.error:  # pragma: no cover
+    except Exception:  # pragma: no cover
         pass
 
 

@@ -7,6 +7,15 @@ library so that the harness can run from an air-gapped operator workstation.
 
 from __future__ import annotations
 
+import sys
+
+if sys.version_info < (3, 11):
+    raise RuntimeError(
+        "Candix requires Python 3.11 or newer (tomllib, exception groups, typing features). "
+        f"Detected Python {sys.version.split()[0]}. "
+        "Please upgrade to Python 3.11+ or use a virtual environment with a newer interpreter."
+    )
+
 __all__ = [
     "AUTHORIZATION_NOTICE",
     "VERSION",

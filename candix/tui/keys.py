@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-import curses
+try:
+    import curses  # type: ignore  # noqa: F401 - only needed for HAS_CURSES detection; actual use is via chr codes
+    HAS_CURSES = True
+except ImportError:
+    curses = None  # type: ignore
+    HAS_CURSES = False
+
 from dataclasses import dataclass
 from typing import Callable
 

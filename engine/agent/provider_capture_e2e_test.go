@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/AAA1234fdja/candix/engine/llmrec"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/BaaRai/Norma/llm"
 )
 
 // End-to-end through a real norma provider: the Capture rides the context into

@@ -23,9 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
+	"github.com/BaaRai/Norma/llm"
+	"github.com/BaaRai/Norma/permission"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 const protocolVersion = "2025-11-25"

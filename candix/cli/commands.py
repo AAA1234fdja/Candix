@@ -568,7 +568,7 @@ def cmd_doctor(args: Any) -> int:
     def record(name: str, status: str, detail: str) -> None:
         checks.append({"check": name, "status": status, "detail": detail})
 
-    record("python", "ok" if sys.version_info >= (3, 10) else "warn", sys.version.split()[0])
+    record("python", "ok" if sys.version_info >= (3, 11) else "error", f"{sys.version.split()[0]} (requires 3.11+)")
     try:
         from candix import build_context  # noqa: F401
 

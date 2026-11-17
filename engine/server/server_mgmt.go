@@ -26,8 +26,8 @@ import (
 	"github.com/AAA1234fdja/candix/engine/agent"
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/notify"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/skill"
+	"github.com/BaaRai/Norma/llm"
+	"github.com/BaaRai/Norma/skill"
 )
 
 // validSkillName checks the agentskills.io name constraints, widened so a skill can

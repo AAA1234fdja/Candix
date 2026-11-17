@@ -16,8 +16,8 @@ import (
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/guard"
 	"github.com/AAA1234fdja/candix/engine/intercept"
-	"github.com/Autumn-27/norma/llm"
-	actool "github.com/Autumn-27/norma/tool"
+	"github.com/BaaRai/Norma/llm"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 // Step 1.9: the WebFetch tool of every agent kind checks each redirect hop

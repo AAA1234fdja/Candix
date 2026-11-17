@@ -6,7 +6,7 @@
 
 **Autonomous penetration testing that keeps its receipts.**
 
-(upstream: [Candix](https://github.com/Autumn-27), AGPL-3.0)
+(upstream: [ARTEX](https://github.com/BaaRai/ARTEX) — fork of [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX), AGPL-3.0; archived as `engine/`)
 
 Self-hosted multi-agent offensive security. A planner explores, workers run real tools,
 and every finding stays bound to the assets and HTTP traffic that prove it.

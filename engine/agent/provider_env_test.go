@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	"github.com/Autumn-27/norma/llm"
+	"github.com/BaaRai/Norma/llm"
 )
 
 // CANDIX_ENGINE_LLM_PROVIDER is matched regardless of case and surrounding spaces. A

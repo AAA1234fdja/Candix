@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Autumn-27/norma/harness"
+	"github.com/BaaRai/Norma/harness"
 )
 
 // Wrap-up prompts (settlement prompts): when an agent is terminated because of

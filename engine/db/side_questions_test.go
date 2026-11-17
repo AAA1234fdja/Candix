@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/AAA1234fdja/candix/engine/sidequestion"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/BaaRai/Norma/llm"
 )
 
 func sideFixture(t *testing.T) (*DB, sidequestion.Snapshot) {

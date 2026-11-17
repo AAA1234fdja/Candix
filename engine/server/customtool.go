@@ -22,8 +22,8 @@ import (
 	"github.com/AAA1234fdja/candix/engine/guard"
 	"github.com/AAA1234fdja/candix/engine/intercept"
 	"github.com/AAA1234fdja/candix/engine/notify"
-	"github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
+	"github.com/BaaRai/Norma/permission"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 // This file implements the custom tool executor (docs/custom-tool-design.md). tools rows

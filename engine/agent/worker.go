@@ -13,12 +13,12 @@ import (
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/egress"
 	"github.com/AAA1234fdja/candix/engine/intercept"
-	"github.com/Autumn-27/norma/agentcore"
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/BaaRai/Norma/agentcore"
+	"github.com/BaaRai/Norma/harness"
+	"github.com/BaaRai/Norma/llm"
+	"github.com/BaaRai/Norma/permission"
+	actool "github.com/BaaRai/Norma/tool"
+	"github.com/BaaRai/Norma/transcript"
 )
 
 // Worker is an LLM work agent (docs §4.4): it claims ONE intent, completes it

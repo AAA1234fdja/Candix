@@ -11,8 +11,8 @@ import (
 
 	"github.com/AAA1234fdja/candix/engine/agent"
 	"github.com/AAA1234fdja/candix/engine/llmrec"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/BaaRai/Norma/llm"
+	"github.com/BaaRai/Norma/transcript"
 )
 
 // Full chain against a real PG: Recorder → norma provider → capturing transport

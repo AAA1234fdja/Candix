@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/AAA1234fdja/candix/engine/intercept"
-	"github.com/Autumn-27/norma/hook"
+	"github.com/BaaRai/Norma/hook"
 )
 
 // AuditEntry records one gated tool call.

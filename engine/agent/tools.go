@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/AAA1234fdja/candix/engine/db"
-	acperm "github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
+	acperm "github.com/BaaRai/Norma/permission"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 // compactIntents distills intents to {id, summary, state, asset_ids, parents,

@@ -14,8 +14,8 @@ import (
 	"github.com/AAA1234fdja/candix/engine/agent"
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/intercept"
-	"github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
+	"github.com/BaaRai/Norma/permission"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 // jsonResult marshals v to a JSON tool result.

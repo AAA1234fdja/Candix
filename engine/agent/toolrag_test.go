@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 func ragTool(name, desc string, params ...string) actool.CoreTool {

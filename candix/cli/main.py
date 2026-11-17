@@ -6,6 +6,13 @@ import os
 import signal
 import sys
 import traceback
+
+if sys.version_info < (3, 11):
+    sys.stderr.write(
+        f"error: Candix requires Python 3.11+ (detected {sys.version.split()[0]}). "
+        "Upgrade Python or use pyenv/conda with 3.11+.\n"
+    )
+    sys.exit(2)
 from typing import Any, Sequence
 
 from candix.cli import output as out

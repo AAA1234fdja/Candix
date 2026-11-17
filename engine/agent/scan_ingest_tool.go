@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/AAA1234fdja/candix/engine/db"
-	acperm "github.com/Autumn-27/norma/permission"
-	actool "github.com/Autumn-27/norma/tool"
+	acperm "github.com/BaaRai/Norma/permission"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 // scanMaxFileBytes caps the scanner output file read by ingest_scan_output.

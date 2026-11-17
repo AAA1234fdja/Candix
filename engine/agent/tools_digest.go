@@ -13,7 +13,7 @@ import (
 	"sort"
 
 	"github.com/AAA1234fdja/candix/engine/db"
-	actool "github.com/Autumn-27/norma/tool"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 // digestMemberEntry builds the compact per-member view expand_digest returns —

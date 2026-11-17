@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-import curses
 import queue
 import sys
 import threading
 import time
 from typing import Any, Sequence
+
+try:
+    import curses  # type: ignore
+
+    HAS_CURSES = True
+except ImportError:
+    curses = None  # type: ignore
+    HAS_CURSES = False
 
 from candix import VERSION
 from candix.core.clock import humanize_duration
@@ -97,10 +104,16 @@ def run_tui(
     if not targets:
         sys.stderr.write("no targets supplied; pass at least one URL\n")
         return 2
+    if not HAS_CURSES:
+        sys.stderr.write(
+            "TUI requires curses (Unix) or 'windows-curses' on Windows. "
+            "Falling back to headless mode — use --json for machine-readable output.\n"
+        )
+        return _headless(targets, config=config, engagement=engagement, exploit=exploit, max_proofs=max_proofs)
     if not _interactive():
         return _headless(targets, config=config, engagement=engagement, exploit=exploit, max_proofs=max_proofs)
     try:
-        return curses.wrapper(
+        return curses.wrapper(  # type: ignore
             _main,
             targets,
             config,
@@ -109,7 +122,8 @@ def run_tui(
             max_proofs,
             report_dir,
         )
-    except curses.error as exc:  # pragma: no cover - terminal too small or unsupported
+    except Exception as exc:  # pragma: no cover - terminal too small or unsupported
+        # curses.error and ImportError both land here
         sys.stderr.write(f"curses unavailable ({exc}); falling back to headless mode\n")
         return _headless(targets, config=config, engagement=engagement, exploit=exploit, max_proofs=max_proofs)
 
@@ -133,14 +147,14 @@ def _main(
     global COLORS
     COLORS = widgets.init_colors()
     try:
-        curses.curs_set(0)
-    except curses.error:
+        curses.curs_set(0)  # type: ignore
+    except Exception:
         pass
     screen.nodelay(True)
     screen.keypad(True)
     try:
-        curses.mousemask(0)
-    except curses.error:
+        curses.mousemask(0)  # type: ignore
+    except Exception:
         pass
     state = DashboardState()
     state.bind(scan_id="scanning", targets=list(targets), profile=str(config.get("profile")), exploit=exploit)
@@ -162,11 +176,12 @@ def _main(
         now = time.monotonic()
         if now - last_draw >= REFRESH_INTERVAL and not state.paused:
             views.render(screen, state)
-            curses.doupdate()
+            if HAS_CURSES:
+                curses.doupdate()  # type: ignore
             last_draw = now
         try:
             ch = screen.getch()
-        except curses.error:
+        except Exception:
             ch = -1
         if ch != -1:
             action = key_to_action(ch)
@@ -201,12 +216,13 @@ def _main(
             state.finished = True
         if state.finished and not worker.is_alive():
             views.render(screen, state)
-            curses.doupdate()
+            if HAS_CURSES:
+                curses.doupdate()  # type: ignore
             screen.nodelay(False)
             try:
                 screen.timeout(15000)
                 screen.getch()
-            except curses.error:
+            except Exception:
                 pass
             break
     worker.join(timeout=3.0)

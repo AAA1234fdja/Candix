@@ -8,8 +8,8 @@ import (
 
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/mcphttp"
-	"github.com/Autumn-27/norma/mcp"
-	actool "github.com/Autumn-27/norma/tool"
+	"github.com/BaaRai/Norma/mcp"
+	actool "github.com/BaaRai/Norma/tool"
 )
 
 // mcpClient is the shared surface of a connected MCP server (stdio, Streamable HTTP,

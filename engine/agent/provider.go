@@ -23,11 +23,11 @@ import (
 	"time"
 
 	"github.com/AAA1234fdja/candix/engine/llmrec"
-	"github.com/Autumn-27/norma/agentcore"
-	"github.com/Autumn-27/norma/compaction"
-	"github.com/Autumn-27/norma/llm"
-	acperm "github.com/Autumn-27/norma/permission"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/BaaRai/Norma/agentcore"
+	"github.com/BaaRai/Norma/compaction"
+	"github.com/BaaRai/Norma/llm"
+	acperm "github.com/BaaRai/Norma/permission"
+	"github.com/BaaRai/Norma/transcript"
 )
 
 // Config describes the LLM backend resolved from the environment.

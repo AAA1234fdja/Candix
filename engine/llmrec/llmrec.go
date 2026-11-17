@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/AAA1234fdja/candix/engine/db"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/transcript"
+	"github.com/BaaRai/Norma/llm"
+	"github.com/BaaRai/Norma/transcript"
 )
 
 type taskIDContextKey struct{}

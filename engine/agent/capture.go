@@ -9,9 +9,9 @@ import (
 	"github.com/AAA1234fdja/candix/engine/db"
 	"github.com/AAA1234fdja/candix/engine/intercept"
 	"github.com/AAA1234fdja/candix/engine/sidequestion"
-	"github.com/Autumn-27/norma/agentcore"
-	"github.com/Autumn-27/norma/harness"
-	"github.com/Autumn-27/norma/llm"
+	"github.com/BaaRai/Norma/agentcore"
+	"github.com/BaaRai/Norma/harness"
+	"github.com/BaaRai/Norma/llm"
 )
 
 // captureRun drives one agent turn-to-completion over Session.Prompt and emits a

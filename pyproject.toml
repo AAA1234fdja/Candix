@@ -18,6 +18,7 @@ classifiers = [
   "Topic :: Security",
 ]
 dependencies = []
+optional-dependencies = { windows = ["windows-curses>=2.3"] }
 
 [project.scripts]
 candix = "candix.cli.main:main"
@@ -26,7 +27,13 @@ candix = "candix.cli.main:main"
 include = ["candix*"]
 # engine/ and docs/ hold the archived AGPL-3.0 engine, which is never packaged:
 # see docs/engine.md
-exclude = ["engine*", "docs*", "skills*", "tests*"]
+exclude = ["engine*", "docs*", "tests*"]
+
+[tool.setuptools.package-data]
+candix = ["_skills/**/SKILL.md", "_skills/**/*.md", "py.typed"]
+
+[tool.setuptools.include-package-data]
+# include SKILL.md files inside candix/_skills as package data
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
