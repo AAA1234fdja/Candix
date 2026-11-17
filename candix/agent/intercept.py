@@ -2,8 +2,13 @@
 
 The rules here are deterministic on purpose: no model scores risk, and the same
 input always produces the same answer with the same reasons. The rules mirror the
-Go gate archived in ``engine/intercept/`` and ``engine/guard/``; this module is an
+Go gate in ``engine/intercept/`` and ``engine/guard/``; this module is an
 independent Python implementation for this codebase.
+
+When ``candix.engine_bridge`` is enabled (``engine.enabled=true`` or
+``CANDIX_ENGINE_URL``), risk scoring can be delegated to the Go engine via
+``EngineClient``/``InterceptProxy`` with a Python fallback — the two
+implementations are kept in sync by ``engine/cmd/bridge`` tests.
 """
 
 from __future__ import annotations
@@ -572,3 +577,39 @@ def explain(command: str) -> str:
     decision = AlwaysAllowDeny().check(command)
     lines.append(decision.describe())
     return "\n".join(lines)
+
+# ---------------------------------------------------------------------------
+# Go engine bridge (optional delegation)
+# ---------------------------------------------------------------------------
+
+def score_via_engine(tool: str, arguments: dict[str, Any] | None = None) -> tuple[bool, Any]:
+    """Try to score via Go engine bridge, falling back to Python.
+
+    Returns (used_go: bool, report: RiskReport|BridgeResult).
+    When the bridge is disabled or unavailable, returns (False, python_report).
+    """
+    try:
+        from candix.engine_bridge.config import BridgeConfig
+        from candix.engine_bridge.client import EngineClient
+
+        cfg = BridgeConfig()
+        # Allow env override
+        import os
+        if os.environ.get("CANDIX_ENGINE_URL"):
+            cfg.url = os.environ["CANDIX_ENGINE_URL"]
+            cfg.enabled = True
+        if os.environ.get("CANDIX_ENGINE_ENABLED", "").lower() in {"1","true","yes","on"}:
+            cfg.enabled = True
+        if not cfg.enabled and not cfg.use_subprocess:
+            raise RuntimeError("bridge disabled")
+        client = EngineClient(cfg)
+        # Use Go subprocess path (no HTTP needed)
+        result = client.score_risk(tool, arguments or {})
+        if result.ok and result.source.startswith("go"):
+            # Adapt Go report to Python RiskReport shape
+            return True, result
+    except Exception:
+        pass
+    # fallback
+    return False, score_tool(tool, arguments)
+

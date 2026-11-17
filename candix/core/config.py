@@ -143,6 +143,7 @@ DEFAULTS: dict[str, Any] = {
         "confirm_exploit": True,
     },
     "tui": {"enabled": False, "refresh_ms": 250},
+    "engine": {"enabled": False, "url": "http://127.0.0.1:8787", "timeout": 2.0, "use_subprocess": True, "auto_start": False},
     "integrations": {
         "sarif": True,
         "webhook": "",

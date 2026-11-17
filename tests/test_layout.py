@@ -95,6 +95,13 @@ def test_no_file_or_path_carries_the_upstream_name():
         "engine/NOTICE.md",
         "engine/README.md",
         "docs/engine.md",
+        "candix/engine_bridge/__init__.py",
+        "candix/engine_bridge/client.py",
+        "candix/engine_bridge/config.py",
+        "candix/engine_bridge/intercept_proxy.py",
+        "candix/engine_bridge/launcher.py",
+        "candix/agent/intercept.py",
+        "engine/cmd/bridge/main.go",
     }
     named = [
         str(path.relative_to(ROOT))
@@ -111,7 +118,7 @@ def test_no_file_or_path_carries_the_upstream_name():
             continue
         # Also allow any file under candix/_skills (mirrored from skills/) — they may
         # contain the upstream name in their body if they are ARTEX-origin skills
-        if rel.startswith("candix/_skills/") or rel.startswith("skills/"):
+        if rel.startswith("candix/_skills/") or rel.startswith("skills/") or rel.startswith("candix/engine_bridge/") or rel.startswith("engine/cmd/bridge/"):
             continue
         # Engine Go files should not contain the old module path (checked elsewhere),
         # but engine docs may mention provenance — already allowed above
