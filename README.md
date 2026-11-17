@@ -7,6 +7,34 @@ turns the result into reports that auditors, engineers and CI systems can consum
 Everything here is standard-library Python (3.11+), so the tool runs from a checkout on
 any host without a dependency install step.
 
+## Agent mode
+
+The agent plans its own work, runs real tools, and closes with evidence instead of
+a hunch:
+
+```bash
+candix agent https://app.example.com \
+  --authorized alice --exploit --autonomy auto --profile lab \
+  --goal "prove the most severe issue" --formats markdown,json,sarif
+```
+
+It crawls, fingerprints, probes for exposed files, ingests OpenAPI documents,
+checks authentication and sessions, runs the detector catalogue, verifies each
+finding with a second request, exploits the strongest ones when allowed, records
+facts with provenance, and calls `goal.prove` before finishing.
+
+* 23 tools with schemas, caps and timeouts
+* deterministic planner offline, schema-checked LLM planner with a heuristic fallback
+* scope, red-line, risk and approval gates that cannot be widened by the model
+* asset graph with coverage, facts with provenance, hash-chained evidence
+* playbooks, resume from saved state, run diffs, Prometheus metrics, self-audit
+* SARIF, HTML, JUnit and Markdown reports from the same run
+
+Documentation: [`docs/agent.md`](docs/agent.md),
+[`docs/agent-safety.md`](docs/agent-safety.md),
+[`docs/agent-runbook.md`](docs/agent-runbook.md),
+[`docs/llm.md`](docs/llm.md). Skills live in [`skills/`](skills).
+
 ## Safety model
 
 Every active technique needs an authorization document. Create one with the engagement

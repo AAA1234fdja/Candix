@@ -688,6 +688,355 @@ def cmd_api(args: Any) -> int:
     return EXIT_OK
 
 
+def _agent_client(args: Any) -> Any:
+    """Build a model client from flags + environment, or return None."""
+
+    from candix.llm.client import LLMClient, RetryPolicy
+    from candix.llm.providers import AnthropicProvider, OllamaProvider, OpenAICompatibleProvider
+
+    if getattr(args, "no_llm", False):
+        return None
+    kind = str(getattr(args, "provider", "") or os.environ.get("CANDIX_LLM_PROVIDER", "")).strip().lower()
+    model = str(getattr(args, "model", "") or os.environ.get("CANDIX_LLM_MODEL", "")).strip()
+    api_key = os.environ.get("CANDIX_LLM_API_KEY", "")
+    base_url = os.environ.get("CANDIX_LLM_BASE_URL", "")
+    if not kind:
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            kind = "anthropic"
+        elif os.environ.get("OPENAI_API_KEY") or base_url:
+            kind = "openai"
+        else:
+            return None
+    try:
+        if kind == "anthropic":
+            provider = AnthropicProvider(
+                model=model or "claude-sonnet-4-5",
+                base_url=base_url or "https://api.anthropic.com",
+                api_key=api_key or os.environ.get("ANTHROPIC_API_KEY", ""),
+            )
+        elif kind == "ollama":
+            provider = OllamaProvider(model=model or "llama3.1", base_url=base_url or "http://127.0.0.1:11434")
+        else:
+            provider = OpenAICompatibleProvider(
+                model=model or "gpt-4.1-mini",
+                base_url=base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+                api_key=api_key or os.environ.get("OPENAI_API_KEY", ""),
+            )
+    except Exception as error:
+        echo(out.paint(f"  model provider unavailable: {error}", "yellow"))
+        return None
+    return LLMClient([provider], retry=RetryPolicy(attempts=2))
+
+
+def cmd_agent(args: Any) -> int:
+    from candix.agent import AgentSession, AgentSettings, AutonomyLevel, BudgetLimits
+    from candix.agent.reporting import render_json, render_markdown, summary_line
+
+    if getattr(args, "list_playbooks", False):
+        from candix.agent.playbooks import default_registry
+
+        registry = default_registry()
+        if args.json_output:
+            out.print_json({"playbooks": registry.catalogue()})
+            return EXIT_OK
+        echo(out.rule("playbooks"))
+        echo(out.table(
+            ["NAME", "STEPS", "WHAT IT DOES"],
+            [(item.name, str(len(item.steps)), item.description[:60]) for item in registry.playbooks.values()],
+        ))
+        echo("")
+        return EXIT_OK
+
+    if not args.targets:
+        echo(out.paint("  agent needs at least one target", "red"))
+        return EXIT_USAGE
+
+    config = load_config(args)
+    if args.exploit:
+        config.set("exploit.enabled", True)
+    engagement = load_engagement(args, list(args.targets), allow_exploit=bool(args.exploit))
+    run_id = time.strftime("%Y%m%d-%H%M%S")
+    artifacts = Path(args.artifacts) if args.artifacts else Path(args.out) / run_id
+    artifacts.mkdir(parents=True, exist_ok=True)
+    journal_path = args.journal or str(artifacts / "journal.jsonl")
+    settings = AgentSettings(
+        goal=args.goal,
+        autonomy=AutonomyLevel.parse(args.autonomy),
+        exploit=bool(args.exploit),
+        limits=BudgetLimits(
+            turns=int(args.turns),
+            intents=int(args.intents),
+            tool_calls=int(args.tool_calls),
+            tokens=int(args.tokens),
+            seconds=float(args.seconds),
+            cost_usd=float(args.cost),
+        ),
+        artifacts_dir=str(artifacts),
+        journal_path=journal_path,
+        memory_path=args.memory,
+        skills_dir=args.skills,
+        max_turns=int(args.turns),
+        use_llm=not args.no_llm,
+        approve_mode=args.approvals,
+        verify=True,
+        dry_run=bool(args.dry_run),
+        playbook=str(getattr(args, "playbook", "") or ""),
+        playbook_limit=int(getattr(args, "playbook_limit", 0) or 0),
+    )
+    client = _agent_client(args)
+
+    def on_event(kind: str, payload: dict[str, Any]) -> None:
+        if args.json_output or args.quiet:
+            return
+        if kind == "plan":
+            echo(out.paint(f"  plan  {payload.get('reasoning', '')[:100]}", "cyan"))
+        elif kind == "intent.start":
+            echo(f"    → {payload.get('title', '')[:70]} [{payload.get('tool', '')}]")
+        elif kind == "intent.finish":
+            mark = "ok" if payload.get("ok") else "fail"
+            echo(out.paint(f"    {mark} {payload.get('summary', '')[:100]}", "grey"))
+        elif kind == "intent.blocked":
+            echo(out.paint(f"    blocked: {payload.get('title', '')} — {payload.get('reason', '')[:90]}", "yellow"))
+        elif kind == "intent.awaiting_approval":
+            echo(out.paint(f"    approval needed: {payload.get('title', '')} (risk {payload.get('risk')})", "yellow"))
+        elif kind == "finding":
+            echo(out.paint(f"    ! {payload.get('severity', '')} {payload.get('title', '')}", "red"))
+
+    session = AgentSession.create(
+        list(args.targets),
+        config=config,
+        engagement=engagement,
+        settings=settings,
+        client=client,
+        skills_dir=args.skills,
+        on_event=on_event,
+    )
+
+    if args.resume:
+        from candix.agent.state_io import SessionState, restore
+
+        try:
+            restored = restore(session, SessionState.load(args.resume))
+            echo(out.paint(f"  resumed: {restored}", "grey"))
+        except Exception as error:
+            echo(out.paint(f"  cannot resume: {error}", "red"))
+            return EXIT_ERROR
+
+    if args.dry_run:
+        return _agent_dry_run(session, settings, args, out)
+
+    echo(out.rule("agent"))
+    echo(out.kv_table(
+        [
+            ("targets", ", ".join(args.targets)),
+            ("goal", settings.goal[:80]),
+            ("autonomy", settings.autonomy.value),
+            ("planner", ", ".join(filter(None, ["llm" if client is not None else "heuristic", settings.playbook]))),
+            ("budget", f"{args.turns} turns · {args.tool_calls} tool calls · {args.seconds:.0f}s"),
+            ("artifacts", str(artifacts)),
+        ],
+        indent=2,
+    ))
+    echo("")
+    try:
+        result = session.run()
+    except KeyboardInterrupt:
+        echo(out.paint("  interrupted", "yellow"))
+        return 130
+    except CandixError as error:
+        echo(out.paint(f"  error: {error}", "red"))
+        return EXIT_ERROR
+
+    snapshot = session.snapshot(result)
+    formats = [item.strip().lower() for item in str(args.formats or "").split(",") if item.strip()]
+    written: dict[str, str] = {}
+    from candix.agent.report_bridge import render as render_format
+    from candix.report.builder import RENDERERS, normalize_format
+
+    for fmt in formats:
+        name = normalize_format(fmt)
+        if name not in RENDERERS:
+            if name == "markdown":
+                path = artifacts / f"agent-{run_id}.md"
+                path.write_text(render_markdown(result, snapshot=snapshot), encoding="utf-8")
+                written["markdown"] = str(path)
+            elif name == "json":
+                path = artifacts / f"agent-{run_id}.json"
+                path.write_text(render_json(result, snapshot=snapshot), encoding="utf-8")
+                written["json"] = str(path)
+            continue
+        try:
+            body = render_format(result, name, snapshot)
+        except Exception as error:
+            echo(out.paint(f"  {name}: renderer failed ({error})", "yellow"))
+            continue
+        path = artifacts / f"agent-{run_id}.{RENDERERS[name].extension}"
+        path.write_text(body, encoding="utf-8")
+        written[name] = str(path)
+    session.save(artifacts / "session.json")
+    try:
+        from candix.agent.audit import markdown as audit_markdown
+        from candix.agent.compliance import ComplianceReport, ControlStatus, Control
+        from candix.agent.insights import export_markdown as insights_markdown
+        from candix.agent.insights import collect
+        from candix.agent.scorecard import Scorecard, CategoryScore
+
+        insight_report = collect(result, session.telemetry, budget=session.budget)
+        (artifacts / "insights.md").write_text(insights_markdown(insight_report), encoding="utf-8")
+        written["insights"] = str(artifacts / "insights.md")
+    except Exception as error:
+        echo(out.paint(f"  insights unavailable: {error}", "yellow"))
+    try:
+        from candix.agent.evidence_chain import build_chain
+
+        chain = build_chain(result, session.assets)
+        chain_path = artifacts / "evidence-chain.json"
+        chain.save(chain_path)
+        written["evidence"] = str(chain_path)
+    except Exception as error:
+        echo(out.paint(f"  evidence chain unavailable: {error}", "yellow"))
+    if getattr(args, "metrics", ""):
+        try:
+            from candix.agent.metrics_export import from_result as metrics_from_result
+
+            metrics = metrics_from_result(result, telemetry=session.telemetry, budget=session.budget, extra_labels={"run": run_id})
+            written["metrics"] = metrics.save(args.metrics)
+        except Exception as error:
+            echo(out.paint(f"  metrics unavailable: {error}", "yellow"))
+    if result.proofs:
+        try:
+            from candix.agent.replay_kit import (checkout_script, from_result, index, write as write_replay)
+
+            bundles = from_result(result)
+            if bundles:
+                replay_dir = artifacts / "replay"
+                write_replay(bundles, replay_dir)
+                (replay_dir / "README.md").write_text(index(bundles), encoding="utf-8")
+                script = replay_dir / "run-all.sh"
+                script.write_text(checkout_script(bundles, str(replay_dir)), encoding="utf-8")
+                script.chmod(0o755)
+                written["replay"] = str(replay_dir)
+        except Exception as error:
+            echo(out.paint(f"  replay kit unavailable: {error}", "yellow"))
+
+    counts = result.counts()
+    if args.json_output:
+        payload = {
+            "stop_reason": result.stop_reason,
+            "counts": counts,
+            "findings": len(result.findings),
+            "proofs": len(result.proofs),
+            "triage": snapshot.get("triage", {}),
+            "duration": round(result.duration, 2),
+            "budget": snapshot["budget"],
+            "journal": snapshot["journal"],
+            "artifacts": {**written, "session": str(artifacts / "session.json")},
+            "lessons": result.lessons,
+        }
+        out.print_json(payload)
+        return EXIT_FINDINGS if result.findings else EXIT_OK
+
+    echo("")
+    echo(out.rule("run summary"))
+    echo(summary_line(result))
+    echo(out.kv_table(
+        [
+            ("stop reason", result.stop_reason[:90]),
+            ("intents", ", ".join(f"{name}={count}" for name, count in sorted(counts.items())) or "none"),
+            ("findings", str(len(result.findings))),
+            ("proofs", str(len(result.proofs))),
+            ("triage", str(snapshot.get("triage", {}).get("summary", ""))[:70] or "n/a"),
+            ("scorecard", str(snapshot.get("scorecard", {}).get("summary", ""))[:70] or "n/a"),
+            ("asvs", str(snapshot.get("compliance", {}).get("summary", ""))[:70] or "n/a"),
+            ("approvals", str(snapshot["approvals"]["pending"]) + " pending"),
+            ("journal", str(snapshot["journal"].get("entries", 0)) + " entries"),
+        ],
+        indent=2,
+    ))
+    if result.findings:
+        echo("")
+        from candix.agent.report_bridge import finding_rows
+
+        ordered = {str(item.get("id", "")): item for item in result.findings}
+        prioritized = []
+        for ranked in snapshot.get("triage", {}).get("ranked", []):
+            item = ordered.get(str(ranked.get("id", "")))
+            if item is not None:
+                prioritized.append(item)
+        for item in result.findings:
+            if item not in prioritized:
+                prioritized.append(item)
+        rows = [
+            (str(item.get("severity", "")), str(item.get("title", ""))[:60], str(item.get("url", ""))[:50])
+            for item in prioritized[:15]
+        ]
+        echo(out.table(["SEVERITY", "FINDING", "ENDPOINT"], rows))
+    if result.lessons:
+        echo("")
+        echo(out.paint("  lessons for the next run:", "grey"))
+        for lesson in result.lessons[:5]:
+            echo(f"    · {lesson.get('text', '')[:110]}")
+    if written:
+        echo("")
+        echo(out.kv_table([(key, value) for key, value in written.items()], indent=2))
+    echo("")
+    return EXIT_FINDINGS if result.findings else EXIT_OK
+
+
+def _agent_dry_run(session: Any, settings: Any, args: Any, out: Any) -> int:
+    """Plan one turn and show what would run, executing nothing."""
+
+    from candix.agent.planner import PlannerState
+
+    planner = session.build_planner()
+    state = PlannerState(
+        goal=settings.goal,
+        targets=session.targets,
+        coverage=session.assets.coverage(),
+        remaining_turns=settings.max_turns,
+        exploit_enabled=settings.exploit,
+    )
+    decision = planner.decide(state)
+    from candix.agent.simulator import simulate
+
+    simulation = simulate(decision.intents, policy=session.policy, registry=session.registry, budget=session.budget)
+    payload = {
+        "action": decision.action,
+        "reasoning": decision.reasoning,
+        "source": decision.source,
+        "intents": [],
+    }
+    if args.json_output:
+        estimates = {item.intent: item.to_dict() for item in simulation.estimates}
+        for intent in decision.intents:
+            gate = session.policy.gate(intent)
+            payload["intents"].append(
+                {**intent.to_dict(), "gate": gate.to_dict(), "estimate": estimates.get(intent.title, {})}
+            )
+        payload["simulation"] = simulation.to_dict()
+        out.print_json(payload)
+        return EXIT_OK
+    echo(out.rule("dry run"))
+    echo(f"planner: {decision.source} · action: {decision.action}")
+    echo(f"reason: {decision.reasoning}")
+    echo("")
+    rows = []
+    for intent in decision.intents:
+        gate = session.policy.gate(intent)
+        allowed = "yes" if gate.allowed else "no"
+        approval = "approve" if gate.requires_approval else "-"
+        rows.append((intent.phase.value, intent.title[:50], intent.tool, allowed, approval, f"{gate.risk:.2f}"))
+    if rows:
+        echo(out.table(["PHASE", "INTENT", "TOOL", "ALLOWED", "GATE", "RISK"], rows))
+    else:
+        echo("no intents planned")
+    echo("")
+    echo(f"simulation: {simulation.summary()}")
+    for note in simulation.notes:
+        echo(out.paint(f"  note: {note}", "yellow"))
+    return EXIT_OK
+
+
 def cmd_notify(args: Any) -> int:
     from candix.integrations.base import Notification, build, load_plugins
     from candix.integrations.siem import render as render_siem
@@ -855,6 +1204,52 @@ def cmd_version(args: Any) -> int:
     return EXIT_OK
 
 
+def cmd_bundle(args: Any) -> int:
+    from candix.agent.reports_bundle import build, prune, verify
+
+    if args.verify:
+        ok, problems = verify(args.path)
+        if args.json_output:
+            out.print_json({"ok": ok, "problems": problems, "path": args.path})
+        else:
+            echo(out.rule("bundle verify"))
+            echo(out.kv_table([("path", args.path), ("ok", str(ok))], indent=2))
+            for problem in problems:
+                echo(out.paint(f"  {problem}", "red"))
+        return EXIT_OK if ok else EXIT_ERROR
+
+    bundle = build(args.path, destination=args.zip or None)
+    removed = prune(args.path) if args.prune else []
+    if args.json_output:
+        out.print_json({"files": len(bundle.entries), "bytes": bundle.size, "zip": args.zip, "pruned": removed})
+    else:
+        echo(out.rule("bundle"))
+        echo(out.kv_table([("files", str(len(bundle.entries))), ("bytes", str(bundle.size)), ("zip", args.zip or "-")], indent=2))
+        for name in removed:
+            echo(out.paint(f"  pruned {name}", "grey"))
+    return EXIT_OK
+
+
+def cmd_agent_diff(args: Any) -> int:
+    from candix.agent.diffing import from_files, regression_gate, summary_table
+
+    diff = from_files(args.before, args.after)
+    ok, reason = regression_gate(diff, fail_on=args.fail_on, allow_new=args.allow_new)
+    if args.json_output:
+        out.print_json({"counts": diff.counts(), "gate": {"ok": ok, "reason": reason}, "summary": diff.summary()})
+    else:
+        echo(out.rule("agent diff"))
+        echo(diff.summary())
+        echo("")
+        echo(diff.markdown())
+        if args.out:
+            Path(args.out).write_text(diff.markdown(), encoding="utf-8")
+            echo(out.kv_table([("written", args.out)], indent=2))
+    if not ok:
+        echo(out.paint(f"  gate: {reason}", "red"))
+    return EXIT_OK if ok else EXIT_FINDINGS
+
+
 COMMANDS = {
     "scan": cmd_scan,
     "exploit": cmd_exploit,
@@ -872,6 +1267,9 @@ COMMANDS = {
     "export": cmd_export,
     "api": cmd_api,
     "notify": cmd_notify,
+    "agent": cmd_agent,
     "playbooks": cmd_playbooks,
+    "bundle": cmd_bundle,
+    "agent-diff": cmd_agent_diff,
     "version": cmd_version,
 }
